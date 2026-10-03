@@ -142,6 +142,20 @@ They do not require a live database or embedding service.
 
 ## Local Memoria integration
 
+`./astra-local.sh --astra-dir /path/to/astra health` uses the checkout's
+`target/debug/astra` binary with the `local` profile and this project's working
+directory for MCP discovery. Put `--astra-dir PATH` before Astra's arguments,
+or set `ASTRA_BIN` to an executable path; the argument takes precedence.
+Relative paths are resolved from the caller's directory. There is no default
+checkout path. The API defaults to `http://127.0.0.1:17001` and the state directory
+to `$HOME/.astra-local`; override these with `ASTRA_API_URL` (or `--api-url`)
+and `ASTRA_LOCAL_STATE_ROOT` respectively.
+`ASTRA_STATE_ROOT` remains a fallback alias when `ASTRA_LOCAL_STATE_ROOT` is unset
+or empty. `health` checks the existing server; `serve` starts
+one with the supplied server environment. The wrapper does not load the
+adjacent Astra checkout's `.env`. The retrieval benchmark driver runs separately
+through `./scripts/run-local.sh benchmark`.
+
 The current local setup uses the Memoria 0.5.2 binary built from the adjacent
 checkout and the MatrixOne connection settings supplied in
 `~/workspace/astra/.env`. It follows Memoria's native development deployment
