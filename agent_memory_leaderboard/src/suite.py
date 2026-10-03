@@ -7,6 +7,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .benchmark import save
+
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = [
     ("LoCoMo-Refined", "textual/locomo_refined", "locomo", "run.json"),
@@ -71,8 +73,7 @@ def main():
                 command.extend(["--runtime-label", args.runtime_label])
             subprocess.run(command, cwd=ROOT, check=False)
     report = snapshot()
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2) + "\n")
+    save(args.output, report)
     print(json.dumps(report, indent=2))
     if args.run and any(r["status"] != "completed" for r in report["datasets"]):
         raise SystemExit(1)

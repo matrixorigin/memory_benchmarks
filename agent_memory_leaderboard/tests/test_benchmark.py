@@ -121,3 +121,28 @@ def test_failed_ingestion_never_searches_and_resume_reuses_ids(tmp_path, monkeyp
     assert additions == [original_add, original_add]
     report = json.loads(args.output.read_text())
     assert report["summary"]["mean_evidence_recall"] == 1
+
+
+def test_interrupted_run_records_retention_deadline(tmp_path, monkeypatch):
+    source = tmp_path / 'dataset.json'
+    source.write_text(json.dumps([{
+        'sample_id': 'sample', 'conversation': {
+            'session_1_date_time': 'date',
+            'session_1': [{'dia_id': 'D1:1', 'speaker': 'A', 'text': 'original fact'}],
+        }, 'qa': [],
+    }]))
+    client = httpx.Client
+    monkeypatch.setattr(benchmark.httpx, 'Client', lambda **kwargs: client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200)), **kwargs))
+
+    def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(benchmark, 'call_adapter', interrupt)
+    args = SimpleNamespace(dataset=source, kind='locomo', conversations=1, top_k=1,
+                           adapter_url='http://test', output=tmp_path / 'report.json', resume=False)
+    assert benchmark.run(args) == 1
+    report = json.loads(args.output.read_text())
+    assert report['status'] == 'interrupted'
+    assert report['privacy']['delete_by']
+    assert report['privacy']['cleanup_after'] < report['privacy']['delete_by']

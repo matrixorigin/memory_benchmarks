@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 import time
 import uuid
 from datetime import UTC, datetime
@@ -51,10 +52,19 @@ def evidence_score(expected, contents):
 
 
 def save(path, report):
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(report, indent=2) + "\n")
-    temporary.chmod(0o600)
-    temporary.replace(path)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.parent.chmod(0o700)
+    # mkstemp creates mode 0600 immediately, even in standalone diagnostic tools
+    # whose process umask is permissive. Unique names avoid temporary-file races.
+    descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(report, stream, indent=2)
+            stream.write("\n")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def summarize(report):
@@ -224,7 +234,7 @@ def run(args):
             report["error"]["http_status"] = exc.response.status_code
         # Never persist arbitrary upstream bodies or exception text containing secrets.
     finally:
-        if report["status"] in {"completed", "failed"}:
+        if report["status"] in {"completed", "failed", "interrupted"}:
             apply_policy(report, datetime.now(UTC))
         report["summary"] = summarize(report)
         save(args.output, report)
