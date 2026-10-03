@@ -1,0 +1,9 @@
+{
+  "dataset": "ScriptMem",
+  "status": "blocked_missing_source_conversations",
+  "official_aml_score": false,
+  "known_questions": 457,
+  "reason": "Official release deliberately omits original script texts; conversation fields contain omission notices and synthetic examples.",
+  "sources": ["https://github.com/memorax-ai/ScriptMem", "https://github.com/memorax-ai/ScriptMem/issues/1"],
+  "required_to_unblock": "Authorized original source conversations matching the published questions."
+}

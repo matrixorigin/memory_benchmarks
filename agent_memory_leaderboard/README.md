@@ -1,4 +1,24 @@
-# Memoria leaderboard adapter
+# Memoria endpoint benchmarks
+
+This project tests public memory datasets against Memoria-backed Add/Search
+endpoints. Benchmarks are grouped into **Textual Datasets** (`benchmarks/textual/`) and
+**Coding Datasets** (`benchmarks/coding/`). Each dataset has a standalone directory:
+
+- [LoCoMo-Refined](benchmarks/textual/locomo_refined/README.md): dialogue evidence recall.
+- [ScriptMem](benchmarks/textual/scriptmem/README.md): original conversations omitted upstream.
+- [LongMemEval-Refined](benchmarks/textual/longmemeval_refined/README.md): exact release unverified.
+- [LongMemEval-S](benchmarks/textual/longmemeval_s/README.md): session evidence recall.
+- [CLBench](benchmarks/textual/clbench/README.md): context-learning endpoint diagnostics.
+- [PersonaMem-v2](benchmarks/textual/personamem_v2/README.md): 32k text-split endpoint diagnostics.
+- [BEAM](benchmarks/textual/beam/README.md): all four public history-length variants.
+- [CAMBench Coding](benchmarks/coding/cambench/README.md): corpus/verifier unreleased.
+- [SWEContextBench](benchmarks/coding/swecontextbench/README.md): historical-issue evidence recall.
+
+Each directory owns its parser, runner entrypoint, data, and results. Shared
+HTTP validation, bounded retries, checkpointing, and reporting live in
+`src/benchmark.py`; `src/datasets.py` registers the dataset adapters. Astra is
+optional for future answer/judge stages; endpoint retrieval tests require only
+the Add/Search service and its Memoria backend.
 
 Implements `POST /add` and `POST /search` from the
 [Agent Memory Leaderboard API guide](https://agentmemories.ai/api-guide).
@@ -132,7 +152,7 @@ payload. It does not retry Search 409/524 or malformed successful responses.
 
 ```sh
 uv run pytest -q
-uv run ruff check src tests
+uv run ruff check src tests benchmarks
 ```
 
 Tests exercise the endpoints against a simulated Memoria HTTP transport,
@@ -158,9 +178,11 @@ through `./scripts/run-local.sh benchmark`.
 
 The current local setup uses the Memoria 0.5.2 binary built from the adjacent
 checkout and the MatrixOne connection settings supplied in
-`~/workspace/astra/.env`. It follows Memoria's native development deployment
-path (`make dev`), using a separate `aml_memoria` database. Astra's source
-configuration and existing databases were not changed.
+`~/workspace/astra/.env`. The legacy URL names `aml_memoria`, but the current
+Memoria CLI automatically selects its multi-database topology and routes each
+benchmark owner into a separate database. The shared registry is shared
+infrastructure and must not be deleted during benchmark cleanup. Astra's source
+configuration was not changed.
 
 The generated `var/local.env` is ignored and mode 0600. It contains the selected
 runtime settings and a separate generated adapter key; never commit it.
@@ -175,7 +197,8 @@ automatically. To start the services in separate terminals and run the live test
 
 The smoke command talks over real HTTP to both services, uses fresh disposable
 users, checks Add/Search, isolation, session coverage, retry deduplication and
-Top K, and removes its test memories on exit. It can also target another
+Top K, and deactivates its test memories on exit. Deactivation is not physical
+deletion and does not satisfy the retention obligation by itself. It can also target another
 configured deployment with `python -m src.smoke --adapter-url URL`.
 
 **Current limitation:** Astra's supplied `MEMORIA_EMBEDDING_BASE_URL` is empty.
@@ -186,6 +209,84 @@ This setup is not yet validated for leaderboard evaluation. Supply the embedding
 endpoint associated with the configured key, set `EMBEDDING_BASE_URL` in the
 private runtime file, restart Memoria, and rerun the live check. Do not assume
 that configuring embeddings alone resolves the observed failure without testing.
+
+## Public LoCoMo-Refined retrieval test
+
+The complete nine-dataset catalog follows the
+[AML benchmark documentation](https://agentmemories.ai/docs#doc-en-benchmarks).
+Inspect saved results or run/resume all available datasets:
+
+```sh
+./scripts/run-local.sh suite
+./scripts/run-local.sh suite --run
+```
+
+The suite writes `state/suite-results.json`. It skips completed and running
+reports, preserves checkpoints for failures, and records missing public releases
+explicitly. A failed ingestion stops that dataset; the suite continues to the
+next dataset. `--run` exits nonzero if any catalog entry is incomplete. A report
+marked running after a process crash must be resumed with the individual runner's
+`--resume` option. Do not start two writers against the same report.
+These are endpoint retrieval diagnostics, not native answer or coding scores.
+
+Run the downloaded public dataset through the local adapter's `/add` and
+`/search` endpoints:
+
+```sh
+./benchmarks/textual/locomo_refined/run.sh --limit 10
+# Resume the same run after an interruption or service failure:
+./benchmarks/textual/locomo_refined/run.sh --limit 10 --resume
+```
+
+The entrypoint is `benchmarks/textual/locomo_refined/benchmark.py`. It defaults to all ten conversations and
+Top K 100; `--conversations 1` selects the first complete history for a pilot.
+Use `--dataset PATH` or `--adapter-url URL` to override the defaults. Credentials
+come from the same private environment as the local adapter. The source dataset
+is `data/raw/locomo_refined.json` in
+[LoCoMo-Refined](https://github.com/mem-eval-suite/LoCoMo_refined).
+
+Only original dialogue text, speakers, source dates, and dialogue IDs enter Add.
+Questions retain their original wording; answers and evidence labels remain
+outside ingestion and retrieval. The report measures the fraction of annotated
+dialogue IDs present in retrieved evidence, with undefined recall for questions
+without evidence labels. Questions marked multimodal are skipped. This is a
+text-only retrieval diagnostic, not answer accuracy or an official AML score;
+it does not invoke Astra's answer model or an LLM judge.
+
+The private JSON report records the dataset hash, isolated run users, successful Add
+chunks, evidence IDs and content hashes, query latency, and failures. Retrieved
+payloads are used in memory for scoring, without duplicate content logs. Each history is fully
+ingested before its questions run. Failed ingestion stops the run, and partial
+results must not be treated as full-dataset scores. Resume reuses identical IDs
+and payloads; keep the backend, adapter configuration, and dataset unchanged.
+Run-scoped memories are retained for diagnosis and resume. Do not delete them
+while resuming that run or resume past its deletion deadline. Raw downloaded data and reports stay under each benchmark’s ignored
+`data/` and `results/` directories. Local chunking uses up to 20 messages or 2,000 whitespace-counted words
+(an individually oversized message stays intact); it does not claim parity
+with AML's frozen dataset adapter.
+
+## Data handling
+
+Follow the [AML security policy](https://agentmemories.ai/docs#doc-en-security):
+use evaluation data only for the current job, preserve exact user isolation,
+keep service credentials out of reports, limit access, and delete data and
+derived copies within 30 days after completion. Dataset payloads are unchanged;
+no credential-redacted variant is enabled. Public local datasets stay on this
+machine; only required history chunks and original queries reach Add/Search.
+Gold answers and relevance labels remain outside those endpoints.
+
+Data and results directories use mode 0700 and their files use mode 0600. Reports
+record `privacy.delete_by` and `privacy.cleanup_after` (one day earlier), and
+resume never extends an existing deadline. A daily thread follow-up checks these
+deadlines. Physical cleanup must include Memoria data, snapshots and derived
+copies: the current Delete APIs only deactivate records. No physical cleanup has
+been claimed complete. Local loopback endpoints are for development; AML's public
+endpoint validation applies before any formal hosted evaluation.
+
+Backend fixes and live reproduction outcomes are recorded locally in
+`state/runtime-fixes.json`, `state/failure-regressions.json`, and
+`state/retrieval-fix-smoke.json`. A resumed report's `attempts` identify backend
+revision changes; pre-fix observations remain distinguishable.
 
 ## Docker deployment with Memoria
 

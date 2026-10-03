@@ -1,0 +1,8 @@
+{
+  "dataset": "LongMemEval-Refined",
+  "status": "blocked_unverified_public_release",
+  "official_aml_score": false,
+  "reason": "No exact public Refined corpus was verified. AML public repository withholds benchmark corpora and publishes a LongMemEval-S contract only.",
+  "sources": ["https://github.com/AML-memory/agent-memory-leaderboard", "https://github.com/xiaowu0162/LongMemEval"],
+  "required_to_unblock": "Exact release URL or authorized corpus with refinement provenance."
+}

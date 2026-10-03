@@ -1,0 +1,28 @@
+# LoCoMo-Refined
+
+This directory owns the dataset parser (`dataset.py`), entrypoint
+(`benchmark.py` / `run.sh`), downloaded data (`data/`), and run reports (`results/`).
+The shared driver calls the configured Memoria-backed Add/Search endpoints.
+
+```sh
+# From the project root; download public data once:
+mkdir -p benchmarks/textual/locomo_refined/data
+curl -fL 'https://raw.githubusercontent.com/mem-eval-suite/LoCoMo_refined/main/data/raw/locomo_refined.json' -o benchmarks/textual/locomo_refined/data/locomo_refined.json
+# Pilot on one complete history:
+./benchmarks/textual/locomo_refined/run.sh --limit 1
+# Resume using exactly the same selection:
+./benchmarks/textual/locomo_refined/run.sh --limit 1 --resume
+```
+
+Use `--output PATH` for another run. Existing reports are never overwritten
+without `--resume`. The launcher loads `var/local.env` or `AML_ENV_FILE` for
+endpoint authentication. Use `--adapter-url URL` for a different Add/Search
+base URL. Data and results are ignored by Git.
+
+Reports measure evidence recall at Top K 100, not answer accuracy or an official
+AML score. All history is ingested before search; labels never enter Add/Search.
+Records remain isolated by run and sample for diagnosis and resume.
+
+Full dataset: `./benchmarks/textual/locomo_refined/run.sh --limit 10`.
+The downloaded release contains 10 histories and 1,382 questions. The text-only
+run skips 521 questions marked multimodal. Recall uses annotated dialogue IDs.

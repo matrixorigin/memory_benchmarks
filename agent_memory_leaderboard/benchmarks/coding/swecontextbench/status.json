@@ -1,0 +1,22 @@
+{
+  "dataset": "SWEContextBench",
+  "checked_date": "2026-10-03",
+  "status": "prepared",
+  "official_aml_score": false,
+  "native_coding_score": null,
+  "native_evaluation_status": "not_run",
+  "native_evaluation_requires": [
+    "Coding-agent patch generation using retrieved memories",
+    "Upstream Docker repository test execution"
+  ],
+  "source": "https://huggingface.co/datasets/jiayuanz3/SWEContextBench",
+  "evaluator_source": "https://github.com/jiayuanz3/SWEContextBench/blob/main/evaluation.sh",
+  "source_rows": {
+    "experience": 1007,
+    "related": 362,
+    "relationship": 362
+  },
+  "prepared_questions": 362,
+  "prepared_repository_scopes": 40,
+  "report": "results/full-run.json"
+}

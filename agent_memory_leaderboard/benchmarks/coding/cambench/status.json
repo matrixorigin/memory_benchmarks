@@ -1,0 +1,11 @@
+{
+  "dataset": "CAMBench Coding",
+  "checked_date": "2026-10-03",
+  "status": "blocked",
+  "reason": "Official coding corpus, verifier materials and protected annotations are unreleased.",
+  "attempted": false,
+  "score": null,
+  "official_aml_score": false,
+  "sources": ["https://agentmemories.ai/docs#doc-en-benchmarks", "https://github.com/AML-memory/agent-memory-leaderboard#-evaluation-at-a-glance"],
+  "next_step": "Obtain authorized public coding corpus and verifier, or separately authorize AML hosted evaluation with issued key and registered public endpoints."
+}

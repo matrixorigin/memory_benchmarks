@@ -1,0 +1,1 @@
+"""Public BEAM benchmark adapter."""

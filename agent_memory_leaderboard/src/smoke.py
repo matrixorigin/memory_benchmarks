@@ -150,7 +150,8 @@ def run(adapter_url: str) -> dict:
             }
         finally:
             # These UUID-scoped users belong solely to this run. Never delete by topic
-            # or touch another user's records. DELETE is Memoria's physical purge API.
+            # or touch another user's records. DELETE deactivates records; it does
+            # not physically erase storage/snapshots for retention compliance.
             for user in users:
                 for memory in records(user):
                     backend("DELETE", "/v1/memories/" + quote(memory["memory_id"], safe=""), user)
