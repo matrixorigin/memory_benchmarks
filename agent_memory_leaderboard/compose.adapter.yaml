@@ -1,0 +1,29 @@
+# Overlay for ~/workspace/memoria/docker-compose.yml; see README.md.
+services:
+  leaderboard-adapter:
+    build:
+      context: ${AML_ADAPTER_DIR:?Set AML_ADAPTER_DIR to this project's absolute path}
+    environment:
+      MEMORIA_URL: http://api:8100
+      MEMORIA_MASTER_KEY: ${MEMORIA_MASTER_KEY:?Set MEMORIA_MASTER_KEY}
+      ADAPTER_API_KEY: ${ADAPTER_API_KEY:?Set a separate ADAPTER_API_KEY}
+      ADAPTER_STATE_DIR: /app/var
+      MEMORIA_NAMESPACE: ${MEMORIA_NAMESPACE:-agent-memory-leaderboard}
+      MEMORIA_TIMEOUT_SECONDS: ${MEMORIA_TIMEOUT_SECONDS:-120}
+    ports:
+      - "127.0.0.1:${ADAPTER_PORT:-8000}:8000"
+    volumes:
+      - leaderboard-state:/app/var
+    networks:
+      - memoria-net
+    depends_on:
+      - api
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  leaderboard-state:
