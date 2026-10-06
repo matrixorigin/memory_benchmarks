@@ -23,7 +23,7 @@ runner 读取的 `ADAPTER_API_KEY`。
 | `dataset` | 默认 `locomo`；`longmemeval` 指 LongMemEval-S，不是 Refined |
 | `histories` | 默认 `1`，允许 `1–10`；选定数据版本的前 N 个完整历史，不是问题数 |
 | `top_k` | 默认 `100`，允许 `1–100` |
-| `runtime_label` | 必填非秘密版本说明，填写当前实际部署的 Memoria commit／镜像 digest，可同时注明适配器版本；从部署记录取得，不要填 key 或连接串 |
+| `runtime_label` | 可选非秘密版本备注，默认留空；可填实际部署的 Memoria commit／镜像 digest 和适配器版本，最多 200 字符，不要填 key 或连接串；仅用于报告 |
 
 第一次建议选 `locomo`、`histories=1`、`top_k=100`。所有选中历史内容先写入，随后查询
 该历史的问题；多模态问题按现有 runner 跳过，不为缩短耗时删去历史内容。
@@ -46,8 +46,11 @@ LoCoMo 原始文件约 2.75 MB，LongMemEval-S 约 277 MB；小集仍下载完�
 随后仅写入／评测所选前 N 个历史。数据文件不上传为 artifact。
 
 报告记录 benchmark checkout SHA、dataset revision／SHA256、选择范围、Top K 和后端
-版本说明。后端说明由操作者填写，**不是自动读取或验证的在线镜像版本**；填写错误会
-影响版本比较，运行前应核对最近实际部署记录。workflow 与 CD 使用同一并发组
+版本说明。后端说明可选，由操作者填写，**不是自动读取或验证的在线镜像版本**。
+留空仍可正常运行，JSON 记录 `null`，Summary 显示 `Not recorded`（版本未记录）；
+版本比较时应从最近实际部署记录取得准确来源。此字段不选择、构建或部署服务，
+benchmark 始终请求 `https://aml.cn-dev.matrixone.tech` 当前部署的 Add/Search。
+workflow 与 CD 使用同一并发组
 `aml-aliyun-unit-new-dev`，防止通过这两个入口在评测过程中更新应用。
 并发组不阻止其他本地客户端、AML 官方任务或手工操作；GitHub 默认只保留一个 pending
 运行，新 pending 可能替换旧 pending，不应同时排队多个部署／评测任务。
@@ -58,6 +61,11 @@ Summary 包含状态、评测进程耗时、写入分块数、已处理／已查
 有证据标签的问题数、召回率、Search P50／P95、按数据集 category 分组的结果及版本。
 准备或执行失败时仍尝试生成 Summary 和 artifact，包含已完成部分及非秘密错误类型／HTTP
 状态；依赖安装失败可从步骤日志定位。硬取消／整 job 超时不能保证最终步骤执行。
+执行程序仅对固定状态码和固定适配器错误文案做精确匹配，记录静态
+`adapter_reason_code`：`write_outcome_unknown`、`write_not_searchable`、
+`memoria_request_denied` 或 `memoria_connection_unavailable`。未知响应、异常格式及
+过大响应只保存错误类型／状态码，不保存原始错误正文。`memoria_request_denied`
+本身不能区分认证范围和内容策略，需要结合后端证据定位；原因码不改变重试或写入语义。
 
 | 指标 | 解释 |
 |---|---|
@@ -71,6 +79,26 @@ Summary 包含状态、评测进程耗时、写入分块数、已处理／已查
 指标仅代表已完成部分；checkpoint 若仍标记 `running`，应结合 Execute outcome 判断
 是否超时／中断，不能当作完成。LoCoMo 的证据单位是消息，LongMemEval-S 是 session，
 两者不能直接据此作横向排名。数据集 category 不是 AML 榜单七个能力维度。
+
+Summary 与 `summary.json` 还按选定历史分别展示 Search／跳过／有证据题数、召回率、
+全部证据命中率、平均返回证据数和 Search P95；全局指标也包含平均返回证据数。
+报告记录每题所属 `sample_id`，以便不同数据集使用稳定的分组。
+新报告还保存取回的 `retrieved_evidence_ids` 和无法匹配原始历史的
+`unmatched_gold_evidence`，均为来源 ID，不保存正文或 gold answer。Summary 展示
+已审计 Search 数和带不匹配 gold 标签的题数；这些题仍按原始 exact-ID 规则计分，
+不自动修正或排除。旧版报告没有此审计字段，不匹配数量显示 N/A，不能当作零。旧版 LoCoMo／LongMemEval
+workflow 报告通过原始问题 ID 兼容分组；无法分配的记录保留在全局指标并单独提示。
+未执行历史可显示 Search 数为 0、召回率为 N/A，不能据此认定检索失败或全量完成。
+返回证据数用于理解检索量，不是越大越好的质量指标；Top K 100 下的召回不代表
+较小证据预算下同样有效。
+
+新报告还记录每题 `evidence_recall_at_k`，按同一次 Search 返回顺序截取前
+1／5／10／20／50／100 条证据及本次实际 Top K，仅计算不超过请求 Top K 的切点。
+Summary 展示各切点的有标签覆盖题数、平均召回和全部证据命中率；无标签题不计入
+分母。不同长度回包仍按其可用前缀计算，不发额外 Search，也不额外写入或调用模型。
+它衡量当前回包的排序效果，不代表另发较小 Top K 请求一定得到相同结果或时延。
+旧报告缺少前缀指标，显示不可用；续跑混合旧／新记录时，以各切点实际覆盖题数解释，
+不能假设覆盖所有已检索问题。
 
 当前 **不计算 Token F1、BLEU-1、答案正确率或 AML 官方分数**。这些需要另外实现
 Answer/Eval 及各数据集的原生评分。成功的 workflow 表示本次流程完成，不代表达到

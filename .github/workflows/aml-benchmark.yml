@@ -17,9 +17,9 @@ on:
         type: number
         default: 100
       runtime_label:
-        description: Deployed Memoria commit or image digest (nonsecret; operator supplied)
+        description: Optional backend version note (report only; blank is allowed; no secrets)
         type: string
-        required: true
+        required: false
 
 permissions:
   contents: read

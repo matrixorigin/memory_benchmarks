@@ -248,7 +248,17 @@ workflow 配置检查与 Pulumi 程序均将该 key 列为必填，缺失时在�
 
 ### 从 Memoria 源码构建
 
-构建入口在本项目的 `AML offline CI` 和 `AML Aliyun dev deployment`。
+Memoria 源码构建只在本项目的 **AML Aliyun dev deployment** 中执行。
+日常 PR／main push 的 **AML offline CI** 保留适配器镜像检查，不构建 Memoria。
+
+| 发布选择 | 是否构建 Memoria |
+|---|---|
+| `deployment_target=both` 或 `memoria`，有效模式为 `source` | 构建并推送，`preview` 和 `deploy` 均执行 |
+| `deployment_target=memory_benchmarks` | 跳过，保留当前 Memoria 镜像 |
+| 更新 Memoria，有效模式为 `image` | 跳过，使用指定 digest 镜像 |
+
+`configured` 按已有配置解析为 `source` 或 `image`。若启用 main push 自动发布，
+该发布 workflow 也会按上述规则构建；自动发布默认关闭。
 默认来源在 [memoria-source.json](memoria-source.json)：
 
 ```json
@@ -260,7 +270,7 @@ workflow 配置检查与 Pulumi 程序均将该 key 列为必填，缺失时在�
 填入 `feature/example` 可构建该分支，填入 tag 或完整 commit SHA 可指定相应版本。
 benchmark workflow 自身仍从 `memory_benchmarks/main` 运行；Memoria 来源 ref 与它独立。
 更换源码仓库时编辑上述 JSON，默认仓库是公开仓库，跨仓库 checkout 使用 GitHub token。
-来源分支／tag 必须存在于该远端仓库；本地未推送的修改不会进入 CI 构建。
+来源分支／tag 必须存在于该远端仓库；本地未推送的修改不会进入发布 workflow 的源码构建。
 Memoria 仓库有新提交不会自动触发本仓库的发布，需要手动触发，或由已启用的
 本仓库 main push 发布读取其最新版本。
 
@@ -287,8 +297,8 @@ rtk proxy docker build --platform linux/amd64 \
   -f ../memory_benchmarks/deploy/docker/memoria.Dockerfile -t memoria:aml-local .
 ```
 
-本地未执行此命令；PR CI 从来源 ref 构建 Memoria 已通过，但不推送。CD 的源码模式负责
-checkout、构建、推送及 digest 传递。`image` 模式跳过 Memoria checkout 和构建。
+本地未执行此示例命令。发布 workflow 的源码模式负责 checkout、构建、推送及 digest
+传递；构建失败会阻止后续发布。`image` 模式跳过 Memoria checkout 和构建。
 
 CD 将 ref、实际完整 commit、构建 tag／UTC 日期、镜像 digest、构建 Dockerfile hash 和 benchmark commit
 保存到 Actions summary 与 `memoria-build-<run id>-<attempt>` artifact，保留 30 天；

@@ -2,9 +2,16 @@ import json
 from types import SimpleNamespace
 
 import httpx
+import pytest
 
 from src import benchmark
-from src.benchmark import batches, evidence_score, summarize
+from src.benchmark import (
+    adapter_reason_code,
+    batches,
+    evidence_prefix_scores,
+    evidence_score,
+    summarize,
+)
 from src.datasets import normalize
 
 
@@ -38,6 +45,44 @@ def test_recall_uses_exact_unique_evidence_and_excludes_unannotated_questions():
     assert evidence_score(["D1:1", "D1:2"], ["[dialogue:D1:1]", "[dialogue:D1:1]"]) == 0.5
     assert evidence_score(["D1:1"], ["[dialogue:D1:10]"]) == 0
     assert evidence_score([], ["[dialogue:D1:1]"]) is None
+
+
+def test_prefix_recall_preserves_order_unique_gold_and_unlabeled_questions():
+    contents = ["[dialogue:D1:1]", "[dialogue:D1:1]", "[dialogue:D2:3]"]
+    assert evidence_prefix_scores(["D1:1", "D2:3"], contents, 3) == {"1": 0.5, "3": 1}
+    assert evidence_prefix_scores([], contents, 3) == {"1": None, "3": None}
+    assert evidence_prefix_scores(["D1:1; D2:3"], contents, 3) == {"1": 0, "3": 0}
+    assert evidence_prefix_scores(["D2:3"], contents, 10) == {"1": 0, "5": 1, "10": 1}
+
+
+@pytest.mark.parametrize("status,reason,code", [
+    (503, "Prior write outcome is unknown; retry the same Add later", "write_outcome_unknown"),
+    (503, "Memoria write is persisted but not yet searchable; retry Add", "write_not_searchable"),
+    (403, "Memoria denied the request; review user scope and content policy",
+     "memoria_request_denied"),
+    (503, "Memoria connection unavailable", "memoria_connection_unavailable"),
+    (403, "Prior write outcome is unknown; retry the same Add later", None),
+    (503, "Prior write outcome is unknown; retry the same Add later SECRET", None),
+])
+def test_failure_reason_codes_require_exact_status_and_reason(status, reason, code):
+    response = httpx.Response(status, json={"detail": {"reason": reason, "key": "SECRET"}})
+    assert adapter_reason_code(response) == code
+
+
+@pytest.mark.parametrize("body", [
+    [], {"detail": []}, {"detail": {"reason": []}}, {"detail": "SECRET"},
+    {"detail": {"reason": "SECRET"}},
+])
+def test_failure_reason_codes_ignore_unknown_envelopes(body):
+    assert adapter_reason_code(httpx.Response(503, json=body)) is None
+
+
+def test_failure_reason_codes_ignore_invalid_or_oversized_json():
+    assert adapter_reason_code(httpx.Response(503, content=b"not JSON SECRET")) is None
+    assert adapter_reason_code(httpx.Response(503, json={
+        "detail": {"reason": "Prior write outcome is unknown; retry the same Add later"},
+        "content": "SECRET" * 2000,
+    })) is None
 
 
 def test_longmemeval_strips_gold_and_preserves_roles_and_history():
@@ -75,7 +120,14 @@ def test_summary_separates_skips_unannotated_and_empty_retrieval():
     assert result["empty_results"] == 1
 
 
-def test_failed_ingestion_never_searches_and_resume_reuses_ids(tmp_path, monkeypatch):
+@pytest.mark.parametrize("gold,score,unmatched", [
+    (["D1:1"], 1, []),
+    (["D1:1; D1:2"], 0, ["D1:1; D1:2"]),
+    ([], None, []),
+])
+def test_failed_ingestion_never_searches_and_resume_reuses_ids(
+    tmp_path, monkeypatch, gold, score, unmatched,
+):
     source = tmp_path / "dataset.json"
     source.write_text(json.dumps([{
         "sample_id": "sample", "conversation": {
@@ -83,7 +135,7 @@ def test_failed_ingestion_never_searches_and_resume_reuses_ids(tmp_path, monkeyp
             "session_1": [{"dia_id": "D1:1", "speaker": "A", "text": "original fact"}],
         },
         "qa": [{"question": "original query", "answer": "GOLD MUST STAY LOCAL",
-                "category": 1, "evidence": ["D1:1"]}],
+                "category": 1, "evidence": gold}],
     }]))
     calls = []
     rejected = True
@@ -94,7 +146,10 @@ def test_failed_ingestion_never_searches_and_resume_reuses_ids(tmp_path, monkeyp
         assert "GOLD MUST STAY LOCAL" not in str(body)
         if request.url.path == "/add":
             if rejected:
-                return httpx.Response(403, json={"detail": "sensitive upstream text"})
+                return httpx.Response(403, json={"detail": {
+                    "reason": "Memoria denied the request; review user scope and content policy",
+                    "content": "sensitive upstream text",
+                }})
             return httpx.Response(200, json={"success": True, **{
                 key: body[key] for key in ("request_id", "user_id", "session_id")}})
         if request.url.path == "/search":
@@ -111,6 +166,7 @@ def test_failed_ingestion_never_searches_and_resume_reuses_ids(tmp_path, monkeyp
     assert benchmark.run(args) == 1
     report = json.loads(args.output.read_text())
     assert report["error"]["http_status"] == 403
+    assert report["error"]["adapter_reason_code"] == "memoria_request_denied"
     assert report["questions"] == {}
     assert "sensitive upstream text" not in args.output.read_text()
     original_add = next(body for path, body in calls if path == "/add")
@@ -120,7 +176,14 @@ def test_failed_ingestion_never_searches_and_resume_reuses_ids(tmp_path, monkeyp
     additions = [body for path, body in calls if path == "/add"]
     assert additions == [original_add, original_add]
     report = json.loads(args.output.read_text())
-    assert report["summary"]["mean_evidence_recall"] == 1
+    assert report["summary"]["mean_evidence_recall"] == score
+    question = next(iter(report["questions"].values()))
+    assert question["sample_id"] == "sample"
+    assert question["retrieved_evidence_ids"] == ["D1:1"]
+    assert question["unmatched_gold_evidence"] == unmatched
+    assert question["evidence_recall_at_k"] == {"1": score}
+    assert report["question_audit_version"] == 1
+    assert sum(path == "/search" for path, body in calls) == 1
 
 
 def test_interrupted_run_records_retention_deadline(tmp_path, monkeypatch):

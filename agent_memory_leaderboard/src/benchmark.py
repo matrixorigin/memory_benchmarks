@@ -43,12 +43,48 @@ def batches(conversation):
             yield session, index, batch
 
 
+def evidence_ids(contents):
+    return set(re.findall(r"\[dialogue:([^\]]+)\]", "\n".join(contents)))
+
+
 def evidence_score(expected, contents):
     expected = set(expected)
-    found = set(re.findall(r"\[dialogue:([^\]]+)\]", "\n".join(contents)))
+    found = evidence_ids(contents)
     if not expected:
         return None
     return len(expected & found) / len(expected)
+
+
+def evidence_prefix_scores(expected, contents, top_k):
+    """Recall of prefixes from this one Search response, without extra requests."""
+    cutoffs = sorted({1, 5, 10, 20, 50, 100, top_k})
+    return {
+        str(k): evidence_score(expected, contents[:k]) for k in cutoffs if k <= top_k
+    }
+
+
+def adapter_reason_code(response):
+    """Recognize fixed adapter reasons without persisting response text or values."""
+    reasons = {
+        (503, "Prior write outcome is unknown; retry the same Add later"):
+            "write_outcome_unknown",
+        (503, "Memoria write is persisted but not yet searchable; retry Add"):
+            "write_not_searchable",
+        (403, "Memoria denied the request; review user scope and content policy"):
+            "memoria_request_denied",
+        (503, "Memoria connection unavailable"): "memoria_connection_unavailable",
+    }
+    if len(response.content) > 8192:
+        return None
+    try:
+        data = response.json()
+    except ValueError:
+        return None
+    detail = data.get("detail") if isinstance(data, dict) else None
+    reason = detail.get("reason") if isinstance(detail, dict) else None
+    if not isinstance(reason, str):
+        return None
+    return reasons.get((response.status_code, reason))
 
 
 def save(path, report):
@@ -115,6 +151,7 @@ def run(args):
             "source": DATASETS[args.kind]["source"],
             "completed_adds": [],
             "questions": {},
+            "question_audit_version": 1,
             "users": [],
             "notes": [
                 "Evidence-ID recall, not answer accuracy or an official AML score.",
@@ -176,6 +213,12 @@ def run(args):
                     completed.add(rid)
                     save(args.output, report)
                     print(f"Added {sample}/{session}/{index}", flush=True)
+                source_ids = {
+                    turn["dia_id"]
+                    for session, turns in conversation["conversation"].items()
+                    if re.fullmatch(r"session_\d+", session)
+                    for turn in turns
+                }
                 for i, question in enumerate(conversation["qa"]):
                     qid = question.get("id", f"{sample}#q{i:04d}")
                     if qid in report["questions"]:
@@ -197,12 +240,20 @@ def run(args):
                         )
                         if len(result.data) > args.top_k:
                             raise ValueError("Search exceeded top_k")
+                        contents = [r.content for r in result.data]
                         record = {
                             "category": question["category"],
                             "returned": len(result.data),
                             "latency_seconds": time.monotonic() - start,
                             "evidence_recall": evidence_score(
-                                question.get("evidence", []), [r.content for r in result.data]
+                                question.get("evidence", []), contents
+                            ),
+                            "retrieved_evidence_ids": sorted(evidence_ids(contents)),
+                            "evidence_recall_at_k": evidence_prefix_scores(
+                                question.get("evidence", []), contents, args.top_k
+                            ),
+                            "unmatched_gold_evidence": sorted(
+                                set(question.get("evidence", [])) - source_ids
                             ),
                         }
                         evidence_dir = args.output.parent / (args.output.stem + ".evidence")
@@ -221,6 +272,7 @@ def run(args):
                             },
                         )
                         record["evidence_file"] = str(evidence_path.relative_to(args.output.parent))
+                    record["sample_id"] = sample
                     report["questions"][qid] = record
                     save(args.output, report)
                 print(f"Finished {sample}", flush=True)
@@ -232,6 +284,8 @@ def run(args):
         )
         if isinstance(exc, httpx.HTTPStatusError):
             report["error"]["http_status"] = exc.response.status_code
+            if code := adapter_reason_code(exc.response):
+                report["error"]["adapter_reason_code"] = code
         # Never persist arbitrary upstream bodies or exception text containing secrets.
     finally:
         if report["status"] in {"completed", "failed", "interrupted"}:
