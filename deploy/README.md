@@ -315,6 +315,16 @@ Pulumi output 和 Memoria Pod annotation 同时记录来源 repo／ref／commit�
 5. 公网启用后的目标接口为 `https://<host>/add` 和 `https://<host>/search`。
    验收 DNS、证书、鉴权、真实写入检索、用户隔离、重启恢复和端到端时延后再参评。
 
+### ACR 推送格式
+
+两个镜像的构建步骤均使用 `provenance: false` 和 `sbom: false`。当前 ACR 入口不接受
+BuildKit 默认 provenance 附件的 `application/vnd.oci.empty.v1+json`，会在 manifest 推送
+阶段拒绝请求。若出现 `unknown manifest class`，应使用已包含上述设置的最新 `main`
+发起新的 Run workflow；重新运行旧记录仍会执行旧版本的 workflow。
+
+镜像 digest、来源 SHA 和构建记录继续保留；这些记录用于追溯版本，不构成签名证明。
+[Docker 构建附件说明](https://docs.docker.com/build/metadata/attestations/)
+
 ### 选择更新范围
 
 `deployment_target` 控制本次更新的应用，默认 `both`。`operation=preview`／`deploy` 均支持。

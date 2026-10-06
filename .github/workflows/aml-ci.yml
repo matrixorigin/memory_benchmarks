@@ -48,6 +48,8 @@ jobs:
         with:
           context: agent_memory_leaderboard
           push: false
+          provenance: false
+          sbom: false
           cache-from: type=gha,scope=aml-adapter
           cache-to: type=gha,mode=max,scope=aml-adapter
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -96,6 +98,8 @@ jobs:
           file: deploy/docker/memoria.Dockerfile
           platforms: linux/amd64
           push: false
+          provenance: false
+          sbom: false
           labels: |
             org.opencontainers.image.source=https://github.com/${{ steps.memoria.outputs.source_repository }}
             org.opencontainers.image.revision=${{ steps.memoria_checkout.outputs.source_commit }}

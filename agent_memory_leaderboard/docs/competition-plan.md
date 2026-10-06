@@ -321,6 +321,18 @@ CI 只构建 `linux/amd64` 而不推送；CD 构建并推送至指定 Hangzhou A
 
 保留 `image` 模式用于部署现成镜像与回退，手动 `memoria_build_mode` 可覆盖本次选择；`configured` 按 Variable 或 JSON 中默认模式执行。该模式要求 `AML_MEMORIA_IMAGE=repository@sha256:...`，跳过 Memoria checkout／构建。现有 Variable 沿用 gitops dev 的 `apiserver-20260817-a8c0397-dbfc6241`，不是源码模式的默认版本，也没有已确认的完整源码 SHA。源码 CI 构建已通过；两种模式的真实 Add/Search 兼容性均待验收。
 
+#### ACR 镜像发布兼容性
+
+当前 Hangzhou ACR 入口拒绝 BuildKit provenance 附件使用的
+`application/vnd.oci.empty.v1+json`。发布适配器和 Memoria 时显式设置
+`provenance: false` 与 `sbom: false`，避免将这类附件随镜像推送；离线 CI 的两项镜像构建
+使用相同设置。[Docker 构建附件说明](https://docs.docker.com/build/metadata/attestations/)
+
+镜像仍按 digest 部署。Memoria 来源 SHA、Dockerfile hash、镜像 tag／digest、benchmark
+commit 和 Actions run 继续写入原有版本记录／镜像标签；这类记录提供版本追溯，不等同于
+签名或可验证 provenance。需要构建证明时，应在兼容的独立存储中保存，或在 registry
+升级并验证附件支持后重新启用。
+
 ### 当前交付状态
 
 已编写通用 `/ready`、离线 CI、阿里云 dev CD、独立 Pulumi／Helm 配置、数据库初始化和凭据配置脚本。目标集群、现有证书控制器和 Issuer 已只读核实；数据库用户／角色／专用库已创建。GitHub `KUBECONFIG` 已替换为用户提供的阿里云 unit 配置，四个运行 Secret 及镜像 Variables 已配置；既有 Pulumi token 和组织 ACR 凭据的实际发布权限、embedding key 的实际模型调用仍需验证。

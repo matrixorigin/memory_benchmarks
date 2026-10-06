@@ -160,6 +160,9 @@ jobs:
           context: agent_memory_leaderboard
           platforms: linux/amd64
           push: true
+          # This ACR endpoint rejects BuildKit's OCI attestation manifests.
+          provenance: false
+          sbom: false
           tags: ${{ steps.image_tags.outputs.adapter_tag }}
           cache-from: type=gha,scope=aml-adapter
           cache-to: type=gha,mode=max,scope=aml-adapter
@@ -172,6 +175,8 @@ jobs:
           file: deploy/docker/memoria.Dockerfile
           platforms: linux/amd64
           push: true
+          provenance: false
+          sbom: false
           tags: ${{ steps.image_tags.outputs.memoria_tag }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ steps.memoria.outputs.source_repository }}
