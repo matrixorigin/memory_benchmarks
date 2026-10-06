@@ -148,7 +148,7 @@ updates during the benchmark; external clients still require team coordination.
 
 After the run:
 
-1. Open **Summary** for metrics, category breakdown, versions, and failure status.
+1. Open **Summary** for metrics, per-history/category breakdown, versions, and failure status.
 2. Download **`aml-benchmark-<run-id>-<attempt>`** for the report/checkpoint,
    selection, summaries, and evidence ID/hash audits. Artifacts last 30 days.
 3. A failed run reports completed work only. Another run creates a new UUID scope;
@@ -169,6 +169,7 @@ for data provenance, metric definitions, timeout and resume behavior.
 | Mean evidence recall | 0–1, higher is better | Average fraction of gold evidence retrieved for labeled questions |
 | All evidence hit rate | 0–1, higher is better | Fraction of labeled questions with all gold evidence retrieved |
 | Empty results | Count | Successful Search requests returning no evidence |
+| Mean returned evidence records | Count per successful Search | Retrieval volume; interpret recall alongside Top K and evidence budget |
 | Search P50 / P95 | Seconds, lower is faster | Client-observed successful Search latency, including retries |
 | Completed Add chunks | Count | History batches successfully accepted by the adapter |
 

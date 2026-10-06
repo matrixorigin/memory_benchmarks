@@ -75,6 +75,18 @@ Summary 包含状态、评测进程耗时、写入分块数、已处理／已查
 是否超时／中断，不能当作完成。LoCoMo 的证据单位是消息，LongMemEval-S 是 session，
 两者不能直接据此作横向排名。数据集 category 不是 AML 榜单七个能力维度。
 
+Summary 与 `summary.json` 还按选定历史分别展示 Search／跳过／有证据题数、召回率、
+全部证据命中率、平均返回证据数和 Search P95；全局指标也包含平均返回证据数。
+报告记录每题所属 `sample_id`，以便不同数据集使用稳定的分组。
+新报告还保存取回的 `retrieved_evidence_ids` 和无法匹配原始历史的
+`unmatched_gold_evidence`，均为来源 ID，不保存正文或 gold answer。Summary 展示
+已审计 Search 数和带不匹配 gold 标签的题数；这些题仍按原始 exact-ID 规则计分，
+不自动修正或排除。旧版报告没有此审计字段，不匹配数量显示 N/A，不能当作零。旧版 LoCoMo／LongMemEval
+workflow 报告通过原始问题 ID 兼容分组；无法分配的记录保留在全局指标并单独提示。
+未执行历史可显示 Search 数为 0、召回率为 N/A，不能据此认定检索失败或全量完成。
+返回证据数用于理解检索量，不是越大越好的质量指标；Top K 100 下的召回不代表
+较小证据预算下同样有效。
+
 当前 **不计算 Token F1、BLEU-1、答案正确率或 AML 官方分数**。这些需要另外实现
 Answer/Eval 及各数据集的原生评分。成功的 workflow 表示本次流程完成，不代表达到
 预设质量阈值；第一版不设置未经基线验证的分数门槛。

@@ -43,9 +43,13 @@ def batches(conversation):
             yield session, index, batch
 
 
+def evidence_ids(contents):
+    return set(re.findall(r"\[dialogue:([^\]]+)\]", "\n".join(contents)))
+
+
 def evidence_score(expected, contents):
     expected = set(expected)
-    found = set(re.findall(r"\[dialogue:([^\]]+)\]", "\n".join(contents)))
+    found = evidence_ids(contents)
     if not expected:
         return None
     return len(expected & found) / len(expected)
@@ -115,6 +119,7 @@ def run(args):
             "source": DATASETS[args.kind]["source"],
             "completed_adds": [],
             "questions": {},
+            "question_audit_version": 1,
             "users": [],
             "notes": [
                 "Evidence-ID recall, not answer accuracy or an official AML score.",
@@ -176,6 +181,12 @@ def run(args):
                     completed.add(rid)
                     save(args.output, report)
                     print(f"Added {sample}/{session}/{index}", flush=True)
+                source_ids = {
+                    turn["dia_id"]
+                    for session, turns in conversation["conversation"].items()
+                    if re.fullmatch(r"session_\d+", session)
+                    for turn in turns
+                }
                 for i, question in enumerate(conversation["qa"]):
                     qid = question.get("id", f"{sample}#q{i:04d}")
                     if qid in report["questions"]:
@@ -197,12 +208,17 @@ def run(args):
                         )
                         if len(result.data) > args.top_k:
                             raise ValueError("Search exceeded top_k")
+                        contents = [r.content for r in result.data]
                         record = {
                             "category": question["category"],
                             "returned": len(result.data),
                             "latency_seconds": time.monotonic() - start,
                             "evidence_recall": evidence_score(
-                                question.get("evidence", []), [r.content for r in result.data]
+                                question.get("evidence", []), contents
+                            ),
+                            "retrieved_evidence_ids": sorted(evidence_ids(contents)),
+                            "unmatched_gold_evidence": sorted(
+                                set(question.get("evidence", [])) - source_ids
                             ),
                         }
                         evidence_dir = args.output.parent / (args.output.stem + ".evidence")
@@ -221,6 +237,7 @@ def run(args):
                             },
                         )
                         record["evidence_file"] = str(evidence_path.relative_to(args.output.parent))
+                    record["sample_id"] = sample
                     report["questions"][qid] = record
                     save(args.output, report)
                 print(f"Finished {sample}", flush=True)

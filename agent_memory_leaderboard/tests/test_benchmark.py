@@ -2,6 +2,7 @@ import json
 from types import SimpleNamespace
 
 import httpx
+import pytest
 
 from src import benchmark
 from src.benchmark import batches, evidence_score, summarize
@@ -75,7 +76,14 @@ def test_summary_separates_skips_unannotated_and_empty_retrieval():
     assert result["empty_results"] == 1
 
 
-def test_failed_ingestion_never_searches_and_resume_reuses_ids(tmp_path, monkeypatch):
+@pytest.mark.parametrize("gold,score,unmatched", [
+    (["D1:1"], 1, []),
+    (["D1:1; D1:2"], 0, ["D1:1; D1:2"]),
+    ([], None, []),
+])
+def test_failed_ingestion_never_searches_and_resume_reuses_ids(
+    tmp_path, monkeypatch, gold, score, unmatched,
+):
     source = tmp_path / "dataset.json"
     source.write_text(json.dumps([{
         "sample_id": "sample", "conversation": {
@@ -83,7 +91,7 @@ def test_failed_ingestion_never_searches_and_resume_reuses_ids(tmp_path, monkeyp
             "session_1": [{"dia_id": "D1:1", "speaker": "A", "text": "original fact"}],
         },
         "qa": [{"question": "original query", "answer": "GOLD MUST STAY LOCAL",
-                "category": 1, "evidence": ["D1:1"]}],
+                "category": 1, "evidence": gold}],
     }]))
     calls = []
     rejected = True
@@ -120,7 +128,12 @@ def test_failed_ingestion_never_searches_and_resume_reuses_ids(tmp_path, monkeyp
     additions = [body for path, body in calls if path == "/add"]
     assert additions == [original_add, original_add]
     report = json.loads(args.output.read_text())
-    assert report["summary"]["mean_evidence_recall"] == 1
+    assert report["summary"]["mean_evidence_recall"] == score
+    question = next(iter(report["questions"].values()))
+    assert question["sample_id"] == "sample"
+    assert question["retrieved_evidence_ids"] == ["D1:1"]
+    assert question["unmatched_gold_evidence"] == unmatched
+    assert report["question_audit_version"] == 1
 
 
 def test_interrupted_run_records_retention_deadline(tmp_path, monkeypatch):

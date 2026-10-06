@@ -146,6 +146,8 @@ def execute():
 def metrics(questions):
     records = list(questions)
     recalls = [r["evidence_recall"] for r in records if r.get("evidence_recall") is not None]
+    returned = [r["returned"] for r in records if "returned" in r]
+    audited = [r for r in records if "unmatched_gold_evidence" in r]
     latencies = sorted(
         r["latency_seconds"] for r in records
         if isinstance(r.get("latency_seconds"), (int, float))
@@ -156,7 +158,12 @@ def metrics(questions):
         "searched_questions": sum("returned" in r for r in records),
         "skipped_questions": sum("skipped" in r for r in records),
         "empty_results": sum(r.get("returned") == 0 for r in records),
+        "mean_returned_records": sum(returned) / len(returned) if returned else None,
         "questions_with_evidence": len(recalls),
+        "evidence_audited_questions": len(audited),
+        "questions_with_unmatched_gold": sum(
+            bool(r["unmatched_gold_evidence"]) for r in audited
+        ) if audited else None,
         "mean_evidence_recall": sum(recalls) / len(recalls) if recalls else None,
         "all_evidence_hit_rate": sum(r == 1 for r in recalls) / len(recalls) if recalls else None,
         # Nearest-rank percentiles; includes request retries, excludes skipped queries.
@@ -165,6 +172,27 @@ def metrics(questions):
         "search_p95_seconds": latencies[math.ceil(len(latencies) * .95) - 1]
         if latencies else None,
     }
+
+
+def history_metrics(report):
+    """Group recorded questions, including unfinished and legacy workflow reports."""
+    samples = report.get("contract", {}).get("conversations", [])
+    groups = {sample: [] for sample in samples}
+    unassigned = []
+    kind = report.get("contract", {}).get("kind", "locomo")
+    for qid, record in report.get("questions", {}).items():
+        sample = record.get("sample_id")
+        if sample is None:
+            # Existing workflow reports predate the explicit sample_id field.
+            if kind == "longmemeval":
+                sample = qid
+            elif kind == "locomo":
+                sample = qid.rpartition("#q")[0]
+        if sample in groups:
+            groups[sample].append(record)
+        else:
+            unassigned.append(record)
+    return {sample: metrics(records) for sample, records in groups.items()}, metrics(unassigned)
 
 
 def cell(value):
@@ -194,6 +222,7 @@ def summary():
         )
         write_json(REPORT, report)
     totals = metrics(report.get("questions", {}).values()) if report else {}
+    histories, unassigned = history_metrics(report)
     groups = {}
     for record in report.get("questions", {}).values():
         if "skipped" not in record:
@@ -213,6 +242,7 @@ def summary():
         "completed_add_chunks": len(report["completed_adds"]) if report else None,
         "metrics": totals,
         "categories": {key: metrics(value) for key, value in groups.items()},
+        "histories": histories, "unassigned_questions": unassigned,
         "official_aml_score": False,
     }
     write_json(RESULTS / "summary.json", final)
@@ -230,7 +260,11 @@ def summary():
          f"{totals['processed_questions']} / {totals['searched_questions']} / "
          f"{totals['skipped_questions']}" if totals else None),
         ("Empty results", totals.get("empty_results")),
+        ("Mean returned evidence records", rounded(totals.get("mean_returned_records"))),
         ("Questions with evidence labels", totals.get("questions_with_evidence")),
+        ("Evidence-audited Search questions", totals.get("evidence_audited_questions")),
+        ("Questions with unmatched gold labels (still scored)",
+         totals.get("questions_with_unmatched_gold")),
         ("Mean evidence recall (0–1, higher is better)",
          rounded(totals.get("mean_evidence_recall"))),
         ("All evidence hit rate (0–1, higher is better)",
@@ -247,6 +281,23 @@ def summary():
         ("Dataset revision", selection.get("source", {}).get("revision")),
         ("Dataset SHA256", selection.get("source", {}).get("sha256")),
     ])
+    if histories:
+        lines += ["", "### By history", "",
+                  "| History | Searched | Skipped | Labeled | Recall | All evidence hit rate | "
+                  "Mean returned | Search P95 (seconds) |",
+                  "|---|---:|---:|---:|---:|---:|---:|---:|"]
+        for sample, stats in histories.items():
+            lines.append(
+                f"| {cell(sample)} | {stats['searched_questions']} | "
+                f"{stats['skipped_questions']} | {stats['questions_with_evidence']} | "
+                f"{rounded(stats['mean_evidence_recall'])} | "
+                f"{rounded(stats['all_evidence_hit_rate'])} | "
+                f"{rounded(stats['mean_returned_records'])} | "
+                f"{rounded(stats['search_p95_seconds'])} |"
+            )
+    if unassigned["processed_questions"]:
+        lines += ["", f"{unassigned['processed_questions']} question records could not be "
+                  "assigned to a selected history; they remain included in aggregate metrics."]
     if groups:
         lines += ["", "### By dataset category", "",
                   "| Category | Searched | Labeled | Recall | All evidence hit rate |",
@@ -260,6 +311,7 @@ def summary():
             )
     lines += ["", "N/A means unavailable, not zero. Failure metrics cover completed work only.",
               "Search latency includes retries; elapsed time excludes data preparation.",
+              "History rows cover recorded work only; zero searched may mean not yet processed.",
               "Dataset categories are not AML's seven leaderboard capability dimensions.",
               "", "Download the run's aml-benchmark artifact for the report/checkpoint, "
               "selection, summary and evidence ID/hash audit files.",
