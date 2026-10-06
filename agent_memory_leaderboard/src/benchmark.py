@@ -63,6 +63,30 @@ def evidence_prefix_scores(expected, contents, top_k):
     }
 
 
+def adapter_reason_code(response):
+    """Recognize fixed adapter reasons without persisting response text or values."""
+    reasons = {
+        (503, "Prior write outcome is unknown; retry the same Add later"):
+            "write_outcome_unknown",
+        (503, "Memoria write is persisted but not yet searchable; retry Add"):
+            "write_not_searchable",
+        (403, "Memoria denied the request; review user scope and content policy"):
+            "memoria_request_denied",
+        (503, "Memoria connection unavailable"): "memoria_connection_unavailable",
+    }
+    if len(response.content) > 8192:
+        return None
+    try:
+        data = response.json()
+    except ValueError:
+        return None
+    detail = data.get("detail") if isinstance(data, dict) else None
+    reason = detail.get("reason") if isinstance(detail, dict) else None
+    if not isinstance(reason, str):
+        return None
+    return reasons.get((response.status_code, reason))
+
+
 def save(path, report):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     path.parent.chmod(0o700)
@@ -260,6 +284,8 @@ def run(args):
         )
         if isinstance(exc, httpx.HTTPStatusError):
             report["error"]["http_status"] = exc.response.status_code
+            if code := adapter_reason_code(exc.response):
+                report["error"]["adapter_reason_code"] = code
         # Never persist arbitrary upstream bodies or exception text containing secrets.
     finally:
         if report["status"] in {"completed", "failed", "interrupted"}:

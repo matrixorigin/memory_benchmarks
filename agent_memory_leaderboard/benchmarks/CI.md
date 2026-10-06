@@ -61,6 +61,11 @@ Summary 包含状态、评测进程耗时、写入分块数、已处理／已查
 有证据标签的问题数、召回率、Search P50／P95、按数据集 category 分组的结果及版本。
 准备或执行失败时仍尝试生成 Summary 和 artifact，包含已完成部分及非秘密错误类型／HTTP
 状态；依赖安装失败可从步骤日志定位。硬取消／整 job 超时不能保证最终步骤执行。
+执行程序仅对固定状态码和固定适配器错误文案做精确匹配，记录静态
+`adapter_reason_code`：`write_outcome_unknown`、`write_not_searchable`、
+`memoria_request_denied` 或 `memoria_connection_unavailable`。未知响应、异常格式及
+过大响应只保存错误类型／状态码，不保存原始错误正文。`memoria_request_denied`
+本身不能区分认证范围和内容策略，需要结合后端证据定位；原因码不改变重试或写入语义。
 
 | 指标 | 解释 |
 |---|---|
