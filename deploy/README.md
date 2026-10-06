@@ -10,11 +10,17 @@ GitHub 运行凭据已准备，公网域名已配置并核实。
 [离线 CI run 37449805528](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37449805528)
 对应 PR 分支版本 `3ad3acc`，Ruff、pytest（152 passed、1 warning）、Helm 3.17.4 两组
 lint／template、适配器／Memoria 源码镜像构建及 Go 编译均通过，不推送镜像或部署。
-本地 Ruff、Go 编译及 Helm 4.1.4 两组渲染也通过，本地未运行 pytest 或容器构建。
+当前探针修复的本地完整 pytest 为 154 passed、1 warning，Ruff 通过；此前本地 Go 编译
+及 Helm 4.1.4 两组渲染也通过。本地未运行容器构建。
 CD、Pulumi preview／up、真实 Add/Search 及公网验收尚未执行；后续提交检查以 PR checks 为准。
 Memoria 默认从 `matrixorigin/memoria` 的 `main` 分支构建，
 也支持选择其他分支、tag、commit 或已发布镜像；实际部署始终使用镜像 digest。
 CI 源码构建已通过，未修改 Memoria 源码；镜像发布和实际运行仍待验收。
+
+**当前发布前仍须修正数据库模式与授权。** 默认 Memoria 源码有意采用多库与自动迁移；
+模板的 `MEMORIA_MULTI_DB=false` 不能强制单库，当前仅授权 `aml_memoria` 的账号不满足
+运行需求。应按专用共享库与用户库配置权限，并验收首次用户写入后再发布。
+控制项及上游设计依据见[数据库模式与部署兼容性](../agent_memory_leaderboard/docs/competition-plan.md#数据库模式与部署兼容性)。
 
 完整方案、交付状态、源码导航和 Review 重点见
 [CI/CD 交付概要与 Review 入口](../agent_memory_leaderboard/docs/competition-plan.md#cicd-交付概要与-review-入口)。
@@ -325,7 +331,8 @@ kubectl --kubeconfig "$HOME/dev/unit-kubeconfig" -n aml-memory-benchmarks \
   port-forward service/aml 8000:80
 ```
 
-`/health` 检查存活，`/ready` 检查 journal 可读及 Memoria `/health`。
+`/health` 直接在事件循环检查存活；`/ready` 使用独立线程容量和 HTTP 连接检查 journal
+可读及 Memoria `/health`，每个 worker 最多一个检查，并发探针直接返回 503，不排队。
 ready 不验证运行 master key、数据库授权、embedding 或 Add/Search 质量。
 
 ## 发布冻结与上线验收
@@ -337,7 +344,8 @@ ready 不验证运行 master key、数据库授权、embedding 或 Add/Search �
 
 CI/CD 已固定 Actions commit SHA，部署依赖安装强制校验 PyPI 发布 hash 并使用 wheel；
 离线检查增加 Helm lint／template，覆盖内部入口＋单 worker 和公网 TLS＋两个 worker。
-`/ready` 的六个用例覆盖健康、上游非 2xx／连接失败／超时及 journal 不可用。
+健康探针的八个用例覆盖健康、上游非 2xx／连接失败／超时、journal 不可用，
+以及 40 个 Search 占满业务线程池时探针仍可用、并发 ready 不排队。
 
 首次部署仍须验收：
 

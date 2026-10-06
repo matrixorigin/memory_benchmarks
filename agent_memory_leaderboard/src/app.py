@@ -1,6 +1,7 @@
 import hmac
 from contextlib import asynccontextmanager
 
+import anyio
 import httpx
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -18,6 +19,13 @@ from .service import MemoryAdapter
 def create_app(settings: Settings | None = None, *, client: httpx.Client | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     http = client or httpx.Client(follow_redirects=False, trust_env=False)
+    # Keep probe connections and thread capacity independent of long Add/Search calls.
+    probe_http = client or httpx.Client(
+        follow_redirects=False, trust_env=False,
+        limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
+    )
+    probe_threads = anyio.CapacityLimiter(1)
+    probe_gate = anyio.Semaphore(1)
     adapter = MemoryAdapter(settings, Memoria(settings, http), Journal(settings.state_dir))
 
     @asynccontextmanager
@@ -25,25 +33,36 @@ def create_app(settings: Settings | None = None, *, client: httpx.Client | None 
         yield
         if client is None:
             http.close()
+            probe_http.close()
 
     app = FastAPI(title="Memoria Leaderboard Adapter", lifespan=lifespan)
 
     @app.get("/health")
-    def health():
+    async def health():
         """Unauthenticated adapter liveness; does not assert Memoria readiness."""
         return {"status": "ok"}
 
-    @app.get("/ready")
-    def ready():
-        """Check journal availability and upstream liveness without writing memories."""
+    def check_readiness() -> bool:
         try:
             with adapter.journal.connect() as db:
                 db.execute("SELECT key FROM requests LIMIT 1").fetchone()
-            response = http.get(f"{settings.memoria_url}/health", timeout=3)
-            if 200 <= response.status_code < 300:
-                return {"status": "ok"}
+            response = probe_http.get(f"{settings.memoria_url}/health", timeout=3)
+            return 200 <= response.status_code < 300
         except (AdapterError, httpx.HTTPError):
-            pass
+            return False
+
+    @app.get("/ready")
+    async def ready():
+        """Check dependencies with one isolated probe per worker and no waiting queue."""
+        try:
+            probe_gate.acquire_nowait()
+        except anyio.WouldBlock:
+            return JSONResponse(status_code=503, content={"status": "not_ready"})
+        try:
+            if await anyio.to_thread.run_sync(check_readiness, limiter=probe_threads):
+                return {"status": "ok"}
+        finally:
+            probe_gate.release()
         return JSONResponse(status_code=503, content={"status": "not_ready"})
 
     def authenticate(request: Request) -> None:
