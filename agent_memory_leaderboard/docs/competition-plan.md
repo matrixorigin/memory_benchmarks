@@ -20,7 +20,7 @@
 | Add/Search 部署 | 已编写 Deployment、Service、journal PVC 和 `/ready` | 准备稳定 owner 前缀及独立认证 key | 未部署或运行真实 Add/Search；持久性和恢复未验收 |
 | 数据库 | 初始化脚本已编写 | 已创建 `aml_memoria` 用户、`aml_memoria_role` 角色和 `aml_memoria` 库；完成新用户登录及库名回查 | Memoria schema 初始化和实际存储／检索权限未验收 |
 | GitHub 配置 | 凭据／环境变量上传脚本已编写，上海 embedding key 为必填 | 六个必需 Repository Secrets 均存在，两个组织 ACR Secrets 可用，镜像和三个私有环境 Variables 已配置；无 key 模型探针返回 401 | Pulumi／ACR 实际权限及带 key 的 embedding 调用待验收 |
-| HTTPS | 已编写 Ingress、Certificate 和证书 Ready 等待步骤 | 已核实 NGINX、cert-manager、生产 Issuer；配置的 DNS 范围为 `cn-dev.matrixone.tech` | 域名和 A 记录待确定；未申请证书或验收公网 HTTPS |
+| HTTPS | 已编写 Ingress、Certificate 和证书 Ready 等待步骤 | 已核实 NGINX、cert-manager、生产 Issuer；`AML_PUBLIC_HOST` 已设置为 `aml.cn-dev.matrixone.tech` | A 记录待域名管理员配置；未申请证书或验收公网 HTTPS |
 
 变更通过 `feat/aml-cicd` 分支向 `origin/main` 提交 PR，交付范围包括 `.github/`、`deploy/`、`/ready`、测试和本目录方案文档。Review 以 PR 完整 diff 为准；实际 dev 配置、凭据和本地运行产物已排除提交。
 
@@ -168,7 +168,11 @@ embedding 默认沿用 gitops dev 配置：上海 OpenAI-compatible `BAAI/bge-m3
 
 启用公网时设置明确域名，并配置 DNS 指向 NGINX 公网地址。chart 声明专用 Certificate，cert-manager 自动申请、保存及续期 TLS Secret；发布等待 Certificate Ready。证书私钥由集群控制器管理，CI/CD 不负责重复签发或更新该 Secret。Let’s Encrypt 当前默认有效期为 90 天，足以覆盖一个月比赛；以真实 `notAfter` 为准并保留自动续期。[cert-manager DNS-01](https://cert-manager.io/docs/configuration/acme/dns01/)，[证书有效期](https://letsencrypt.org/docs/cert-lifetimes/)
 
-域名当前待确定，尚未请求证书。Certificate／Ingress 配置不代表已经具备可验证的 HTTPS 公网接口；仍须核查解析、证书链和实际可达性。[Kubernetes Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/)
+公网域名选定为 `aml.cn-dev.matrixone.tech`，GitHub Repository Variable `AML_PUBLIC_HOST` 已设置。公开入口为该域名下的 `/add` 与 `/search`，当前尚未部署或请求证书。Certificate／Ingress 配置不代表已经具备可验证的 HTTPS 公网接口；仍须核查解析、证书链和实际可达性。[Kubernetes Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/)
+
+DNS 使用独立的 `cn-dev.matrixone.tech` 阿里云解析区域，已核对其 NS 为 `ns1.alidns.com`／`ns2.alidns.com`。域名管理员需添加 `aml` 主机记录、类型 A、值 `47.97.230.53`、默认线路、TTL 600 秒；该值来自 unit NGINX LoadBalancer，后续以实际入口 IP 为准。当前公共查询无该域名记录，本机阿里云配置查询该区域返回 `IncorrectDomainUser`，因此未创建 DNS 记录。维护者需使用有该区域权限的账号完成配置，不能在父域 `matrixone.tech` 的其他解析系统中误建同名记录。
+
+现有应用 CD 管理 Ingress 和 Certificate，cert-manager 管理 DNS-01 验证及证书续期；它们不会自动创建业务 A 记录。当前未发现 unit 集群的 ExternalDNS Deployment，A 记录由域名管理员一次性配置并维护，DNS 管理凭据不进入本项目 CI。阿里云也支持通过有权限的 CLI／API 或既有基础设施流程创建记录。[阿里云 DNS API](https://www.alibabacloud.com/help/en/dns/api-alidns-2015-01-09-adddomainrecord)
 
 Ingress 配置 1800 秒读／发送超时，并关闭上游自动重试。正式参评前还需核查 SLB、NGINX 控制器限制、请求体大小与整批 Add 的真实时长；不能据此声明整个链路已满足所有 AML 30 分钟请求。本项目不将控制面 `mocloud-alb` 的路由或监听器配置复制到 unit 集群。
 
@@ -270,6 +274,6 @@ CI 只构建 `linux/amd64` 而不推送；CD 构建并推送至指定 Hangzhou A
 
 Memoria 默认源码构建与来源分支选择已接入 CI/CD，默认 ref 为 `main`；已读取当前上游源码及基础镜像 manifest，未运行构建。现成镜像模式保留 gitops dev 已保存且固定 digest 的版本用于可选发布，实际 API／数据库运行兼容性和 embedding 可用性均尚未验收。
 
-代码与配置通过本分支 PR 交付；应用资源尚未部署，公网域名待确定、证书尚未申请。冻结、worker 参数、Helm 检查、ready 用例、依赖锁定、私有配置和初始化恢复保护已编写；本地 Ruff、Go 编译和 Helm 4.1.4 两组渲染通过。本地未运行 pytest、真实 Add/Search 或基准；Actions 执行结果以 PR checks 为准。Helm 3.17.4、真实镜像只读运行、公网长请求和数据库恢复行为均待验收。正式发布及质量验收需分别完成。
+代码与配置通过本分支 PR 交付；应用资源尚未部署，公网域名已配置为 `aml.cn-dev.matrixone.tech`，A 记录待配置、证书尚未申请。冻结、worker 参数、Helm 检查、ready 用例、依赖锁定、私有配置和初始化恢复保护已编写；本地 Ruff、Go 编译和 Helm 4.1.4 两组渲染通过。本地未运行 pytest、真实 Add/Search 或基准；Actions 执行结果以 PR checks 为准。Helm 3.17.4、真实镜像只读运行、公网长请求和数据库恢复行为均待验收。正式发布及质量验收需分别完成。
 
 后续代码和实验通过本项目任务／PR 共建。旧独立 Memoria 路径未迁入；既有核实结论见 [Issue #1 独立修正评论](https://github.com/matrixorigin/memory_benchmarks/issues/1#issuecomment-5987006462)。

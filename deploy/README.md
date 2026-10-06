@@ -155,7 +155,7 @@ AML 评测，因此 AML 平台的评测授权 key 也不属于此 CI/CD 配置�
 | `AML_DEV_CD_ENABLED` | 可选，`true` 才启用 main push 自动部署；默认仅手动发布 |
 | `AML_FREEZE` | 可选，`true` 阻止自动和手动部署；空或 `false` 允许，其他值拒绝继续；preview 仍可执行 |
 | `AML_ADAPTER_WORKERS` | 可选，正整数，默认 `1`；传给 Helm `workers` 与 Uvicorn，不增加 Pod 副本数 |
-| `AML_PUBLIC_HOST` | 可选，设置后启用 HTTPS Ingress；未设置时仅部署集群内服务 |
+| `AML_PUBLIC_HOST` | 已设置为 `aml.cn-dev.matrixone.tech`；启用 HTTPS Ingress，仍须配置 DNS 并执行部署 |
 | `AML_TLS_SECRET` | 可选，cert-manager 生成的 TLS Secret 名，默认 `aml-tls` |
 | `AML_CERT_ISSUER` | 可选，默认复用 Ready 的 `aliyun-prod-letsencrypt` ClusterIssuer |
 
@@ -289,10 +289,27 @@ NGINX 路由设置 1800 秒读／发送超时和关闭上游自动重试，以�
 续期任务。当前集群已有 cert-manager `v1.12.1`，三个组件均有可用副本，生产／staging
 Issuer 均为 Ready；此 CD 不安装或升级共享控制器。该旧版本的维护属于集群基础设施职责。
 
-当前生产 Issuer 的 DNS webhook 配置范围为 `cn-dev.matrixone.tech`；例如可选择
-`aml.cn-dev.matrixone.tech`，但需要先确认域名未被占用并配置 DNS。域名不属于该范围时，
+当前生产 Issuer 的 DNS webhook 配置范围为 `cn-dev.matrixone.tech`；已选定并配置
+`aml.cn-dev.matrixone.tech`。公共 DNS 当前无该记录，本机阿里云账号对该区域返回
+`IncorrectDomainUser`，A 记录仍待域名管理员添加。域名不属于该范围时，
 需要基础设施维护者提供对应 Issuer，不能仅修改应用域名后假定签发成功。
 [cert-manager DNS-01](https://cert-manager.io/docs/configuration/acme/dns01/)
+
+DNS 解析区域为 `cn-dev.matrixone.tech`（已委派给 `ns1.alidns.com`／`ns2.alidns.com`），
+请使用拥有该区域权限的阿里云账号添加以下记录：
+
+| 字段 | 值 |
+|---|---|
+| 主机记录 | `aml` |
+| 类型 | `A` |
+| 记录值 | `47.97.230.53`（部署时核对 unit NGINX LoadBalancer） |
+| 线路 | 默认 |
+| TTL | 600 秒 |
+
+cert-manager 自动管理证书验证 TXT 和续期，不自动创建业务 A 记录；本应用流程也未
+安装 ExternalDNS。这条 A 记录由域名管理员一次性配置，后续入口 IP 变化时维护。
+有正确区域权限时可以通过阿里云 CLI／API 添加，不要求只能在控制台操作。
+[阿里云添加记录 API](https://www.alibabacloud.com/help/en/dns/api-alidns-2015-01-09-adddomainrecord)
 
 Let’s Encrypt 当前默认有效期为 90 天，覆盖一个月比赛；以实际 Certificate 的 `notAfter`
 为准，续期持续由 cert-manager 管理。
