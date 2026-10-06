@@ -56,8 +56,10 @@ check, not evidence that Add/Search or the embedding provider works correctly.
 The deployment target is the Aliyun dev unit cluster, using a dedicated Memoria
 backend and database login. Local evaluation remains available.
 See [competition design](docs/competition-plan.md) for runtime scope and workload
-budgets. The offline CI checks code and builds the adapter and Memoria images
-without publishing or deploying them.
+budgets. The offline CI checks code and builds the adapter image without
+publishing or deploying it. Memoria source builds run only in the dev deployment
+workflow when updating Memoria in source mode, including preview. Adapter-only
+updates and existing-image mode skip Memoria builds.
 The [dev deployment workflow](../deploy/README.md) defaults to building Memoria
 from its `main` branch; another branch, tag, commit, or existing image can be selected.
 It publishes the selected images and deploys both services by digest through an

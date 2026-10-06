@@ -24,7 +24,7 @@ CI/CD、Memoria 部署模板和自动证书配置已合入 `memory_benchmarks` �
 
 | 部分 | 代码／配置状态 | 已执行的工作 | 待验证／待完成 |
 |---|---|---|---|
-| 离线 CI | 已编写 Ruff、pytest、Helm lint／template、适配器／Memoria 源码镜像构建、Go Pulumi 编译；八个健康探针用例 | Actions 两个 job 均通过，pytest 为 154 passed、1 warning；Helm 3.17.4 两组检查及两个镜像构建通过 | CI 不推送镜像或部署；后续提交检查以 PR checks 为准 |
+| 离线 CI | 单个 `checks` job 执行 Ruff、pytest、Helm lint／template、适配器镜像构建、Go Pulumi 检查；八个健康探针用例；不构建 Memoria | 已有 CI 运行通过，pytest 为 154 passed、1 warning；Helm 3.17.4 两组检查及适配器镜像构建通过 | 当前提交以 PR checks 为准；CI 不推送镜像或部署 |
 | benchmark workflow | 已编写手动选择 LoCoMo／LongMemEval-S、固定数据校验、Summary 与 artifact；复用已有执行程序 | 来源 revision、大小与 SHA256 已获取，未调用线上 benchmark | 首次 Actions 小集运行及质量基线待验收；无 Answer/Eval |
 | dev CD | main 手动 preview／deploy、冻结检查、单项更新选择；自动部署默认关闭 | 首次完整 CD 成功，两个镜像推送和 Pulumi up 通过 | 真实单项更新保留效果仍待验收 |
 | Memoria 部署 | 源码／现成镜像模式、分支选择、版本记录及数据库／embedding 配置 | 源码模式部署通过，实际 Pod 在非 root／只读根文件系统下 Ready | 现成镜像模式与重启恢复仍待验收 |
@@ -33,7 +33,7 @@ CI/CD、Memoria 部署模板和自动证书配置已合入 `memory_benchmarks` �
 | GitHub 配置 | 运行凭据／环境变量配置，上海 embedding key 为必填 | 本次部署验证集群、Pulumi、ACR、数据库及应用认证链路 | 未来凭据轮换与权限变更重新验收 |
 | HTTPS | Ingress、Certificate 和证书 Ready 等待 | DNS 与入口匹配，证书 Ready，公网健康检查和 Add/Search 通过正常 TLS 校验 | 真实 SLB 长请求超时仍待验收 |
 
-离线 CI 证据为 [Actions run 37452656686](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37452656686)，对应 PR 分支版本 `c54dc53`，2026-10-06 两个 job 均为 Success。当前多库配置修复的本地完整 pytest 为 154 passed、1 warning，Ruff 通过；此前本地 Go 编译及 Helm 4.1.4 两组渲染也通过。容器构建的通过证据来自上述 CI 版本。该记录不证明镜像已发布或应用已上线。
+已有完整构建验证见 [Actions run 37452656686](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37452656686)，对应 `c54dc53`，2026-10-06 检查和当时的 Memoria 源码构建 job 均通过，pytest 为 154 passed、1 warning。当前离线 CI 只保留 `checks`，Memoria 源码构建由发布 workflow 执行，后续提交的验证以对应 PR checks 为准。上述离线记录本身不证明上线；实际发布证据见当前交付状态。
 
 交付范围包括 `.github/`、`deploy/`、`/ready`、测试和本目录方案文档；后续变更继续通过 PR
 交付到 `origin/main`。实际 dev 配置、凭据和本地运行产物排除提交。
@@ -85,7 +85,7 @@ flowchart LR
     C --> NG
 ```
 
-Memoria 默认从源码 `main` 分支构建，由本项目 CD 部署，也可指定分支、tag、commit 或现成镜像；CI 构建已通过，尚未发布或部署，未修改 Memoria 源码。数据库引擎、模型服务、NGINX 和证书控制器是既有基础设施。详细设计和资源边界见下文，具体配置与操作见发布说明。
+Memoria 默认从源码 `main` 分支构建，由本项目 CD 部署，也可指定分支、tag、commit 或现成镜像；源码构建、镜像推送、dev 部署及公网 Add/Search 最小联调已通过，未修改 Memoria 源码。数据库引擎、模型服务、NGINX 和证书控制器是既有基础设施。详细设计和资源边界见下文，具体配置与操作见发布说明。
 
 ## 当前工程与职责
 
@@ -193,7 +193,7 @@ embedding 默认沿用 gitops dev 配置：上海 OpenAI-compatible `BAAI/bge-m3
 
 ### CI/CD 凭据边界与配置
 
-离线 CI 无须手工配置 Secret；公开 Memoria 源码 checkout 使用 Actions 自动提供的 `GITHUB_TOKEN`。dev preview／deploy 均需要八个必需凭据：Repository Secrets `KUBECONFIG`、`PULUMI_TOKEN`、`AML_DATABASE_PASSWORD`、`AML_MEMORIA_MASTER_KEY`、`AML_ADAPTER_API_KEY`、`AML_EMBEDDING_API_KEY`，以及本仓库可访问的 Organization Secrets `NEW_ACR_USERNAME`／`NEW_ACR_PASSWORD`。来源、填写方法和当前准备状态统一列于 [发布说明的 Secrets 表](../../deploy/README.md#secrets)。
+离线 CI 无须手工配置 Secret，也不 checkout Memoria；发布 workflow 的公开 Memoria 源码 checkout 使用 Actions 自动提供的 `GITHUB_TOKEN`。dev preview／deploy 均需要八个必需凭据：Repository Secrets `KUBECONFIG`、`PULUMI_TOKEN`、`AML_DATABASE_PASSWORD`、`AML_MEMORIA_MASTER_KEY`、`AML_ADAPTER_API_KEY`、`AML_EMBEDDING_API_KEY`，以及本仓库可访问的 Organization Secrets `NEW_ACR_USERNAME`／`NEW_ACR_PASSWORD`。来源、填写方法和当前准备状态统一列于 [发布说明的 Secrets 表](../../deploy/README.md#secrets)。
 
 `KUBECONFIG` 存储用户提供的阿里云 unit 完整原始 YAML，不存本机路径或 base64；workflow 写临时文件供 Kubernetes provider 使用，结束时清理。`PULUMI_TOKEN` 映射为 `PULUMI_ACCESS_TOKEN`，只用于独立应用 stack 的 Pulumi Cloud 访问。ACR 凭据用于镜像推送并生成 namespace 内的拉取 Secret。数据库密码、master key、对外 adapter key 和 embedding key 进入 `aml-runtime`，按需供各 Pod 使用；数据库运行 DSN 使用专用用户，由 Pulumi 编码和生成。管理员数据库密码不进入持续发布。
 
@@ -237,7 +237,13 @@ Ingress 配置 1800 秒读／发送超时，并关闭上游自动重试。正式
 
 ### 离线 CI
 
-PR、main push 或手动触发 **AML offline CI** 时，执行依赖锁定安装、Ruff、pytest、固定版本 `actionlint v1.7.7` 的 workflow YAML／Actions 表达式检查、Helm lint／template、适配器镜像构建及 Pulumi 程序编译；独立 job 从配置的 Memoria ref 构建源码镜像，记录实际 commit，两者均不推送到 registry。Helm 检查使用假镜像 digest、模型 URL 和域名，覆盖内部入口／单 worker，以及公网 Ingress／Certificate／两个 worker。workflow 不引用集群、Pulumi、ACR 或跨仓库发布 Secret，不自动运行真实 HTTP smoke、LLM 基准或官方 Smoke／Full。这里的离线指不调用真实业务／评测接口，依赖安装和源码 checkout 仍需要网络。
+PR、main push 或手动触发 **AML offline CI** 时，执行依赖锁定安装、Ruff、pytest、固定版本 `actionlint v1.7.7` 的 workflow YAML／Actions 表达式检查、Helm lint／template、适配器镜像构建及 Pulumi 程序编译／测试，统一在 `checks` job 中执行；适配器镜像不推送到 registry，离线 CI 不 checkout 或构建 Memoria。Helm 检查使用假镜像 digest、模型 URL 和域名，覆盖内部入口／单 worker，以及公网 Ingress／Certificate／两个 worker。workflow 不引用集群、Pulumi、ACR 或跨仓库发布 Secret，不自动运行真实 HTTP smoke、LLM 基准或官方 Smoke／Full。这里的离线指不调用真实业务／评测接口，依赖安装和本仓库 checkout 仍需要网络。
+
+Memoria 是独立来源仓库，日常适配器、评测或文档变更不重复编译它。其源码构建只在
+**AML Aliyun dev deployment** 选择更新 `both`／`memoria`、且有效模式为 `source` 时执行；
+`preview` 和 `deploy` 均构建并推送。仅更新适配器或使用现成镜像时跳过。
+源码构建成功并取得 digest 后才继续发布，构建失败阻止更新。若显式启用 main push
+自动发布，则该发布运行也遵循此规则；普通合并触发的离线 CI 不构建 Memoria。
 
 ### 手动 benchmark workflow
 
@@ -358,7 +364,7 @@ API 地址、集群 UID 和租户标识属于环境信息，不等同于密码�
 
 本项目的 `deploy/docker/memoria.Dockerfile` 是源码构建入口，构建上下文为检出的 Memoria 仓库根目录。原源码 Dockerfile 默认 Rust 1.85，而当前 lock 含要求 1.88 的依赖；比赛构建采用 Rust 1.90.0，builder／runtime 同为 Debian Bookworm，并固定基础镜像 digest，避免构建器与运行环境的 glibc 差异。`cargo build --locked --release --bin memoria` 使用来源仓库的 Cargo.lock、vendored 依赖及 SQLX offline 数据；下载／编译采用缓存。运行镜像以 UID 1000 执行 `memoria serve`，日志写标准输出。该构建文件在 benchmark 仓库维护，无须修改所选 Memoria 分支；未来编译器要求变化需更新此文件。
 
-CI 只构建 `linux/amd64` 而不推送；CD 构建并推送至指定 Hangzhou ACR 仓库。源码模式下 `AML_MEMORIA_REPOSITORY` 默认使用适配器的同一仓库，由不同项目 tag 前缀区分两个镜像；两个镜像的实际推送与 Pod 拉取已通过。只有构建成功并返回有效 digest 后才进入 Pulumi／Helm；不会把新 digest 写回 GitHub Variable。记录包含请求的 ref、实际完整 commit、构建 tag／UTC 日期、镜像 digest、构建 Dockerfile hash、benchmark commit 和 Actions run。Actions summary／artifact 保存构建信息，Pulumi output 和 Memoria Pod annotation 标记来源版本。artifact 当前保留 30 天，长期评测结果应另存版本信息。
+离线 CI 只检查适配器镜像；Memoria 的 `linux/amd64` 源码镜像仅由 CD 按更新范围构建，并推送至指定 Hangzhou ACR 仓库。源码模式下 `AML_MEMORIA_REPOSITORY` 默认使用适配器的同一仓库，由不同项目 tag 前缀区分两个镜像；两个镜像的实际推送与 Pod 拉取已通过。只有构建成功并返回有效 digest 后才进入 Pulumi／Helm；不会把新 digest 写回 GitHub Variable。记录包含请求的 ref、实际完整 commit、构建 tag／UTC 日期、镜像 digest、构建 Dockerfile hash、benchmark commit 和 Actions run。Actions summary／artifact 保存构建信息，Pulumi output 和 Memoria Pod annotation 标记来源版本。artifact 当前保留 30 天，长期评测结果应另存版本信息。
 
 当前 ACR registry 为 `registry.cn-hangzhou.aliyuncs.com`，namespace 为 `moc-pub`，repository 统一为 `plugin`。tag 采用用户指定的 `<project>-<YYYYMMDD>-<7 位 SHA>` 格式；project 分别为 `aml-memory-adapter` 与 `aml-memoria`，日期统一取工作流生成 tag 时的 UTC 构建日期，SHA 来自各自的实际源码版本。共享 repository 由项目前缀区分，实际部署引用为 `<registry>/<ACR namespace>/<repository>@sha256:<digest>`。完整源码 SHA 仍保存在版本记录，不依赖短 SHA 追溯。ACR namespace 与 Kubernetes namespace `aml-memory-benchmarks` 是独立概念；可选现成 Memoria 镜像保留 `moc-pub/memoria` 的有效 digest 引用。完整示例和 Variable 填写规则见 [镜像名称结构](../../deploy/README.md#镜像名称结构)。
 
@@ -370,7 +376,7 @@ CI 只构建 `linux/amd64` 而不推送；CD 构建并推送至指定 Hangzhou A
 
 当前 Hangzhou ACR 入口拒绝 BuildKit provenance 附件使用的
 `application/vnd.oci.empty.v1+json`。发布适配器和 Memoria 时显式设置
-`provenance: false` 与 `sbom: false`，避免将这类附件随镜像推送；离线 CI 的两项镜像构建
+`provenance: false` 与 `sbom: false`，避免将这类附件随镜像推送；离线 CI 的适配器镜像构建
 使用相同设置。[Docker 构建附件说明](https://docs.docker.com/build/metadata/attestations/)
 
 镜像仍按 digest 部署。Memoria 来源 SHA、Dockerfile hash、镜像 tag／digest、benchmark

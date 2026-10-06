@@ -243,6 +243,11 @@ deployment needs `both`; single-service updates retain the unselected service's
 deployed image and configuration. Shared credential/configuration changes need
 `both`. Updates use Recreate and can interrupt requests.
 
+Memoria source builds run only in this deployment workflow when the target is
+`both` or `memoria` and the resolved mode is `source`. Adapter-only updates and
+`image` mode skip Memoria builds. Ordinary PRs and merges do not build Memoria
+in offline CI; a main push can still build it if automatic deployment is enabled.
+
 The workflow manages the dedicated `memory-benchmarks/new-dev` Pulumi stack and
 `aml-memory-benchmarks` namespace. Operators configure the dedicated SQL account,
 runtime credentials, ACR access, cluster identity, ingress, and TLS issuer.
@@ -256,7 +261,7 @@ database bootstrap, selective updates, DNS/certificates, and acceptance checks.
 
 | Workflow | Trigger | Result |
 |---|---|---|
-| [AML offline CI](.github/workflows/aml-ci.yml) | Matching PRs/pushes or manual | Lint, tests, workflow/chart validation, image builds and Pulumi checks; no live benchmark or deployment |
+| [AML offline CI](.github/workflows/aml-ci.yml) | Matching PRs/pushes or manual | Lint, tests, workflow/chart validation, adapter image build and Pulumi checks; no Memoria build, live benchmark or deployment |
 | [AML Aliyun dev deployment](.github/workflows/aml-dev-deploy.yml) | Manual; main push when explicitly enabled | Publish images and preview/update the dev stack |
 | [AML benchmark](.github/workflows/aml-benchmark.yml) | Manual, main only | Call deployed Add/Search and publish retrieval reports |
 
