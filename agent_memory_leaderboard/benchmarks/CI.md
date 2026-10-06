@@ -23,7 +23,7 @@ runner 读取的 `ADAPTER_API_KEY`。
 | `dataset` | 默认 `locomo`；`longmemeval` 指 LongMemEval-S，不是 Refined |
 | `histories` | 默认 `1`，允许 `1–10`；选定数据版本的前 N 个完整历史，不是问题数 |
 | `top_k` | 默认 `100`，允许 `1–100` |
-| `runtime_label` | 必填非秘密版本说明，填写当前实际部署的 Memoria commit／镜像 digest，可同时注明适配器版本；从部署记录取得，不要填 key 或连接串 |
+| `runtime_label` | 可选非秘密版本备注，默认留空；可填实际部署的 Memoria commit／镜像 digest 和适配器版本，最多 200 字符，不要填 key 或连接串；仅用于报告 |
 
 第一次建议选 `locomo`、`histories=1`、`top_k=100`。所有选中历史内容先写入，随后查询
 该历史的问题；多模态问题按现有 runner 跳过，不为缩短耗时删去历史内容。
@@ -46,8 +46,11 @@ LoCoMo 原始文件约 2.75 MB，LongMemEval-S 约 277 MB；小集仍下载完�
 随后仅写入／评测所选前 N 个历史。数据文件不上传为 artifact。
 
 报告记录 benchmark checkout SHA、dataset revision／SHA256、选择范围、Top K 和后端
-版本说明。后端说明由操作者填写，**不是自动读取或验证的在线镜像版本**；填写错误会
-影响版本比较，运行前应核对最近实际部署记录。workflow 与 CD 使用同一并发组
+版本说明。后端说明可选，由操作者填写，**不是自动读取或验证的在线镜像版本**。
+留空仍可正常运行，JSON 记录 `null`，Summary 显示 `Not recorded`（版本未记录）；
+版本比较时应从最近实际部署记录取得准确来源。此字段不选择、构建或部署服务，
+benchmark 始终请求 `https://aml.cn-dev.matrixone.tech` 当前部署的 Add/Search。
+workflow 与 CD 使用同一并发组
 `aml-aliyun-unit-new-dev`，防止通过这两个入口在评测过程中更新应用。
 并发组不阻止其他本地客户端、AML 官方任务或手工操作；GitHub 默认只保留一个 pending
 运行，新 pending 可能替换旧 pending，不应同时排队多个部署／评测任务。

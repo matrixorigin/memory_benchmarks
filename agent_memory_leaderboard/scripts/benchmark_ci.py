@@ -69,13 +69,15 @@ def prepare():
     limit = integer("AML_BENCHMARK_HISTORIES", "1", min(10, source["histories"]))
     top_k = integer("AML_BENCHMARK_TOP_K", "100", 100)
     label = os.getenv("AML_BENCHMARK_RUNTIME_LABEL", "").strip()
-    if not label or len(label) > 200 or any(ord(c) < 32 for c in label):
-        raise BenchmarkError("Provide a nonsecret backend revision label (1-200 characters)")
+    if len(label) > 200 or any(ord(c) < 32 for c in label):
+        raise BenchmarkError(
+            "Backend revision label: maximum 200 characters, no control characters"
+        )
     if REPORT.exists():
         raise BenchmarkError("A checkpoint already exists; use a fresh workflow workspace")
     selection = {
         "dataset": kind, "source": source, "histories": limit, "top_k": top_k,
-        "adapter_url": ADAPTER_URL, "runtime_label": label,
+        "adapter_url": ADAPTER_URL, "runtime_label": label or None,
         "backend_revision_verified": False,
         "benchmark_commit": os.getenv("GITHUB_SHA", "local"),
         "workflow_run_id": os.getenv("GITHUB_RUN_ID"),
@@ -129,8 +131,9 @@ def execute():
         "--dataset", str(DATA), "--output", str(REPORT),
         "--adapter-url", selection["adapter_url"],
         "--limit", str(selection["histories"]), "--top-k", str(selection["top_k"]),
-        "--runtime-label", selection["runtime_label"],
     ]
+    if label := selection.get("runtime_label"):
+        command.extend(["--runtime-label", label])
     outcome = subprocess.run(command, cwd=ROOT, check=False)
     selection.update(
         status="completed" if outcome.returncode == 0 else "failed",
@@ -239,7 +242,8 @@ def summary():
         ("Preparation / execution error", json.dumps(failure) if failure else None),
         ("Last checkpoint stage", final["stage"]),
         ("Benchmark commit", selection.get("benchmark_commit")),
-        ("Backend revision (operator supplied, not verified)", selection.get("runtime_label")),
+        ("Backend revision (operator supplied, not verified)",
+         selection.get("runtime_label") or "Not recorded"),
         ("Dataset revision", selection.get("source", {}).get("revision")),
         ("Dataset SHA256", selection.get("source", {}).get("sha256")),
     ])

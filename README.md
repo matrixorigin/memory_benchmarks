@@ -18,7 +18,7 @@ answer/coding scores, and official AML leaderboard scores are separate work.
 | Task | What you need | Instructions |
 |---|---|---|
 | Try the deployed API | Adapter access key | [API quick start](#try-the-deployed-api) |
-| Run a benchmark in Actions | Workflow access; deployed backend revision | [Run a benchmark](#run-a-benchmark) |
+| Run a benchmark in Actions | Workflow access; configured adapter access key | [Run a benchmark](#run-a-benchmark) |
 | Develop the adapter locally | Python 3.12+, uv, running Memoria, master key | [Local development](#local-development) |
 | Deploy or update services | Configured deployment Secrets and Variables | [Deployment](#deploy-or-update-services) |
 | Understand the design | No runtime credentials | [Competition design](agent_memory_leaderboard/docs/competition-plan.md) |
@@ -132,15 +132,18 @@ key into the run inputs.
 | `dataset` | `locomo` | LoCoMo-Refined; `longmemeval` selects LongMemEval-S |
 | `histories` | `1` | First N complete histories from the pinned dataset; allowed 1–10 |
 | `top_k` | `100` | Retrieval limit; allowed 1–100 |
-| `runtime_label` | Current deployed Memoria commit or image digest | Required nonsecret version label, supplied by the operator |
+| `runtime_label` | Blank | Optional nonsecret backend version note; report only, supplied by the operator |
 
 One history can contain many sessions, messages, and questions. The full selected
 history is written before querying it; `histories=1` does not mean one question.
 Start with one history, then increase the scope after checking resource use.
 
 The workflow pins data revisions and verifies file size and SHA256. Its backend
-label is operator supplied and is **not automatically verified** against the live
-service. It shares a concurrency group with deployment to prevent workflow-based
+label is optional, operator supplied, and **not automatically verified** against the live
+service. Leaving it blank records `null` and displays **Not recorded** in the summary.
+It does not select or deploy a backend: the benchmark calls the currently deployed
+Add/Search endpoint at `https://aml.cn-dev.matrixone.tech`.
+It shares a concurrency group with deployment to prevent workflow-based
 updates during the benchmark; external clients still require team coordination.
 
 After the run:

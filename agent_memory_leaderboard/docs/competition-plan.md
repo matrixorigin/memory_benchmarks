@@ -256,8 +256,12 @@ Memoria 是独立来源仓库，日常适配器、评测或文档变更不重复
 
 两套来源固定 revision、原始文件大小和 SHA256，先下载／验证再调用服务。
 `benchmarks/ci-datasets.json` 维护可扩展来源注册；新数据集必须补齐数据准备与指标语义，
-已有解析入口不代表已具备原生质量评分。后端版本说明由操作者填写并明确标注未自动
-验证，报告同时保存 benchmark commit、数据版本、选择范围和 Top K。
+已有解析入口不代表已具备原生质量评分。`runtime_label` 是可选的非秘密报告备注，
+默认留空，不作为评测前置条件，也不选择、构建或部署后端。benchmark 请求固定公网
+Add/Search 入口当前部署的适配器及 Memoria；留空时 JSON 记录 `null`，Summary 显示
+`Not recorded`（版本未记录）。填写时最多 200 字符，不含控制字符，并明确标注为操作者
+提供、未自动验证；正式版本对比应填写实际部署的 commit／digest。报告同时保存
+benchmark commit、数据版本、选择范围和 Top K。
 
 Summary 展示执行状态、完整／部分进度、耗时、证据召回率、全部证据命中率、空结果、
 Search P50／P95 和原始 category 分组；未知指标显示 N/A，有证据标签的问题才进入召回率
