@@ -19,6 +19,7 @@ CI/CD、Memoria 部署模板和自动证书配置已合入 `memory_benchmarks` �
 | 部分 | 代码／配置状态 | 已执行的工作 | 待验证／待完成 |
 |---|---|---|---|
 | 离线 CI | 已编写 Ruff、pytest、Helm lint／template、适配器／Memoria 源码镜像构建、Go Pulumi 编译；八个健康探针用例 | Actions 两个 job 均通过，pytest 为 154 passed、1 warning；Helm 3.17.4 两组检查及两个镜像构建通过 | CI 不推送镜像或部署；后续提交检查以 PR checks 为准 |
+| benchmark workflow | 已编写手动选择 LoCoMo／LongMemEval-S、固定数据校验、Summary 与 artifact；复用已有执行程序 | 来源 revision、大小与 SHA256 已获取，未调用线上 benchmark | 首次 Actions 小集运行及质量基线待验收；无 Answer/Eval |
 | dev CD | main 手动 preview／deploy、冻结检查、单项更新选择；自动部署默认关闭 | 首次完整 CD 成功，两个镜像推送和 Pulumi up 通过 | 真实单项更新保留效果仍待验收 |
 | Memoria 部署 | 源码／现成镜像模式、分支选择、版本记录及数据库／embedding 配置 | 源码模式部署通过，实际 Pod 在非 root／只读根文件系统下 Ready | 现成镜像模式与重启恢复仍待验收 |
 | Add/Search 部署 | Deployment、Service、journal PVC 和 `/ready` | PVC Bound；公网真实 Add/Search 七项最小联调通过 | 持久性、未知写入恢复及容量仍待验收 |
@@ -231,6 +232,34 @@ Ingress 配置 1800 秒读／发送超时，并关闭上游自动重试。正式
 ### 离线 CI
 
 PR、main push 或手动触发 **AML offline CI** 时，执行依赖锁定安装、Ruff、pytest、固定版本 `actionlint v1.7.7` 的 workflow YAML／Actions 表达式检查、Helm lint／template、适配器镜像构建及 Pulumi 程序编译；独立 job 从配置的 Memoria ref 构建源码镜像，记录实际 commit，两者均不推送到 registry。Helm 检查使用假镜像 digest、模型 URL 和域名，覆盖内部入口／单 worker，以及公网 Ingress／Certificate／两个 worker。workflow 不引用集群、Pulumi、ACR 或跨仓库发布 Secret，不自动运行真实 HTTP smoke、LLM 基准或官方 Smoke／Full。这里的离线指不调用真实业务／评测接口，依赖安装和源码 checkout 仍需要网络。
+
+### 手动 benchmark workflow
+
+独立 `.github/workflows/aml-benchmark.yml` 使用 GitHub hosted runner 执行已有
+`src/benchmark.py`，手动选择 LoCoMo-Refined 或 LongMemEval-S。默认前 1 个完整历史，
+允许 1–10 个历史和 Top K 1–100；不自动随 PR、push、部署或定时任务运行。
+工作流仅接受本仓库 main，固定调用当前 dev 公网入口；唯一业务凭据为已配置的
+`AML_ADAPTER_API_KEY`，映射为 runner 的 `ADAPTER_API_KEY`，仅在执行步骤注入。
+不重新部署应用，不要求 SQL、master key、kubeconfig、Pulumi 或 LLM key。
+
+两套来源固定 revision、原始文件大小和 SHA256，先下载／验证再调用服务。
+`benchmarks/ci-datasets.json` 维护可扩展来源注册；新数据集必须补齐数据准备与指标语义，
+已有解析入口不代表已具备原生质量评分。后端版本说明由操作者填写并明确标注未自动
+验证，报告同时保存 benchmark commit、数据版本、选择范围和 Top K。
+
+Summary 展示执行状态、完整／部分进度、耗时、证据召回率、全部证据命中率、空结果、
+Search P50／P95 和原始 category 分组；未知指标显示 N/A，有证据标签的问题才进入召回率
+分母。LoCoMo 使用消息证据，LongMemEval-S 使用 session 证据；不跨数据集直接排名，
+category 也不映射为 AML 七个能力维度。当前不生成答案、不提供 Token F1／BLEU-1 或官方
+AML 分数，未设置无基线支持的质量门槛。
+
+报告生成和上传在失败时也执行，artifact 30 天保存 checkpoint、版本及证据 ID／hash，
+不上传原始数据或检索正文；硬取消／整个 job 超时的最终步骤仅尽力执行。
+执行步骤上限 120 分钟、job 160 分钟，与 CD 使用相同并发组且不取消正在运行的任务；
+不自动修改 AML_FREEZE。并发组不控制外部客户端／官方评测，默认 pending 队列也不保证
+保留多个待执行任务。第一版无跨 Actions run 自动续跑；重新触发生成新 UUID，原数据
+按既有保留期限管理，artifact 过期不代替后台物理清理。
+首次小集 Actions 运行尚未验收；使用步骤和指标定义见[benchmark 说明](../benchmarks/CI.md)。
 
 ### dev CI/CD
 

@@ -588,6 +588,11 @@ CI/CD 已固定 Actions commit SHA，部署依赖安装强制校验 PyPI 发布 
 
 ## 发布与评测分开
 
+手动评测入口为 **Actions → AML benchmark**，支持 LoCoMo-Refined 和 LongMemEval-S，
+默认一个完整历史。它复用现有 `AML_ADAPTER_API_KEY`，不使用部署凭据；与 CD 共用并发组，
+防止 workflow 发布中断正在执行的 benchmark。Summary 和下载报告的操作步骤见
+[benchmark workflow 说明](../agent_memory_leaderboard/benchmarks/CI.md)。
+
 CI/CD 完成服务发布；基准由明确的评测任务触发。owner 前缀、独立用户、专用库和
 独立 Memoria 隔离权限及数据，MatrixOne、embedding、NGINX 和节点容量仍可能共享。
 从一次小集任务开始测量吞吐、P50／P95、错误和模型额度；全局并发、速率与总量预算
