@@ -297,11 +297,15 @@ Pulumi output 和 Memoria Pod annotation 同时记录来源 repo／ref／commit�
 ## 发布流程
 
 1. 将变更合入 `main`，填写上述 Secrets／Variables。
-2. Actions 中选择 **AML Aliyun dev deployment** → `preview`。它先选择
+2. Actions 中选择 **AML Aliyun dev deployment**，点击 **Run workflow**。
+   workflow 分支选择 `main`，`operation` 选择 `preview`，
+   `memoria_build_mode` 选择 `source`，`memoria_ref` 填 `main`。
+   它先选择
    Memoria 来源并检出源码，核对目标集群、权限和 StorageClass，运行离线检查，
    构建并发布适配器及所选 Memoria 镜像，再预览独立 Pulumi stack。
    **preview 也会发布镜像，并可能创建空的 Pulumi stack，但不创建 Kubernetes 应用资源。**
-3. 选择 `deploy` 执行发布。程序等待 Helm 和 Pod 就绪，单个 dev 发布串行执行。
+3. 再次点击 **Run workflow**，保持上述分支／来源参数，将 `operation` 改为 `deploy`
+   执行发布。程序等待 Helm 和 Pod 就绪，单个 dev 发布串行执行。
    任务入口和 `up` 前检查冻结，Pulumi 对真实更新也检查 `AML_FREEZE`。
    自动部署默认关闭，Actions 不调用真实 Add/Search 或启动基准／官方评测。
 4. 核对公网域名的 DNS 和 `AML_PUBLIC_HOST`（当前均已配置）。chart 创建应用自己的 `Certificate`，
@@ -310,6 +314,10 @@ Pulumi output 和 Memoria Pod annotation 同时记录来源 repo／ref／commit�
    NGINX 公网地址；2026-10-06 只读核实的地址是 `47.97.230.53`，以发布时实际值为准。
 5. 公网启用后的目标接口为 `https://<host>/add` 和 `https://<host>/search`。
    验收 DNS、证书、鉴权、真实写入检索、用户隔离、重启恢复和端到端时延后再参评。
+
+离线检查流程是 **AML offline CI**，不会部署应用。CI 使用固定版本
+`actionlint v1.7.7` 检查 workflow YAML 和 Actions 表达式。若部署流程仅显示文件路径、
+立即失败且没有 job，应先检查 workflow 文件语法；这种失败不会创建应用资源。
 
 NGINX 路由设置 1800 秒读／发送超时和关闭上游自动重试，以支持同步 Add。
 整个链路的 SLB、控制器限制和 AML 契约还要核实；这不构成已支持所有 30 分钟请求的证明。

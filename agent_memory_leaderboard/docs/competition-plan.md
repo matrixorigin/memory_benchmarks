@@ -219,7 +219,7 @@ Ingress 配置 1800 秒读／发送超时，并关闭上游自动重试。正式
 
 ### 离线 CI
 
-PR、main push 或手动触发 **AML offline CI** 时，执行依赖锁定安装、Ruff、pytest、Helm lint／template、适配器镜像构建及 Pulumi 程序编译；独立 job 从配置的 Memoria ref 构建源码镜像，记录实际 commit，两者均不推送到 registry。Helm 检查使用假镜像 digest、模型 URL 和域名，覆盖内部入口／单 worker，以及公网 Ingress／Certificate／两个 worker。workflow 不引用集群、Pulumi、ACR 或跨仓库发布 Secret，不自动运行真实 HTTP smoke、LLM 基准或官方 Smoke／Full。这里的离线指不调用真实业务／评测接口，依赖安装和源码 checkout 仍需要网络。
+PR、main push 或手动触发 **AML offline CI** 时，执行依赖锁定安装、Ruff、pytest、固定版本 `actionlint v1.7.7` 的 workflow YAML／Actions 表达式检查、Helm lint／template、适配器镜像构建及 Pulumi 程序编译；独立 job 从配置的 Memoria ref 构建源码镜像，记录实际 commit，两者均不推送到 registry。Helm 检查使用假镜像 digest、模型 URL 和域名，覆盖内部入口／单 worker，以及公网 Ingress／Certificate／两个 worker。workflow 不引用集群、Pulumi、ACR 或跨仓库发布 Secret，不自动运行真实 HTTP smoke、LLM 基准或官方 Smoke／Full。这里的离线指不调用真实业务／评测接口，依赖安装和源码 checkout 仍需要网络。
 
 ### dev CI/CD
 
