@@ -8,23 +8,28 @@
 
 ## CI/CD 交付概要与 Review 入口
 
-当前交付位于 `memory_benchmarks` 的 **`feat/aml-cicd`** 分支，基于 `b037c42`。CI/CD、Memoria 部署模板和自动证书配置已编写；离线 CI 已通过，公网 DNS 已配置并核实。**本次没有将 Memoria 或适配器部署到集群。** 数据库初始化和 GitHub 凭据配置已执行，CD 和运行验收仍待执行。
+CI/CD、Memoria 部署模板和自动证书配置已合入 `memory_benchmarks` 的 `origin/main`。
+**Memoria 与适配器已部署到阿里云 dev，公网 HTTPS 和真实 Add/Search 最小联调通过。**
+具体运行、实际 SHA／digest 和剩余验收范围见[当前交付状态](#当前交付状态)。
+部署操作、Actions 参数及可复制的公网 curl／Python 示例见
+[发布与接入说明](../../deploy/README.md#发布流程)和[Add/Search 接入](../../deploy/README.md#接入已部署的-addsearch)。
 
 ### 完成状态
 
 | 部分 | 代码／配置状态 | 已执行的工作 | 待验证／待完成 |
 |---|---|---|---|
 | 离线 CI | 已编写 Ruff、pytest、Helm lint／template、适配器／Memoria 源码镜像构建、Go Pulumi 编译；八个健康探针用例 | Actions 两个 job 均通过，pytest 为 154 passed、1 warning；Helm 3.17.4 两组检查及两个镜像构建通过 | CI 不推送镜像或部署；后续提交检查以 PR checks 为准 |
-| dev CD | 已编写 main 手动 preview／deploy、冻结检查；自动部署默认关闭 | 目标集群身份、存储、现有入口已只读核实；三个私有环境 Variables 已上传 | 未运行 CD Actions、Pulumi preview／up；发布凭据实际权限未验证 |
-| Memoria 部署 | 已编写源码／现成镜像模式、分支选择、构建与版本记录、Deployment、Service、Secret 及数据库／embedding 配置 | CI 源码构建通过；已核实上游默认多库及自动迁移设计 | 显式多库、专用共享库与动态用户库授权已配置；尚未创建 Pod |
-| Add/Search 部署 | 已编写 Deployment、Service、journal PVC 和 `/ready` | 准备稳定 owner 前缀及独立认证 key | 未部署或运行真实 Add/Search；持久性和恢复未验收 |
-| 数据库 | 初始化脚本已编写 | 已创建 `aml_memoria` 用户、`aml_memoria_role` 角色和 `aml_memoria` 库；完成新用户登录及库名回查 | 建库／DDL／CRUD 及其他角色测试库的拒绝访问已验证；完整 Memoria schema／检索待验收 |
-| GitHub 配置 | 凭据／环境变量上传脚本已编写，上海 embedding key 为必填 | 六个必需 Repository Secrets 均存在，两个组织 ACR Secrets 可用，镜像和三个私有环境 Variables 已配置；无 key 模型探针返回 401 | Pulumi／ACR 实际权限及带 key 的 embedding 调用待验收 |
-| HTTPS | 已编写 Ingress、Certificate 和证书 Ready 等待步骤 | 已核实 NGINX、cert-manager、生产 Issuer；`AML_PUBLIC_HOST` 已设置，公共 DNS 解析为 `47.97.230.53`，与 NGINX 入口一致 | 尚无应用 Ingress；未申请证书或验收公网 HTTPS |
+| dev CD | main 手动 preview／deploy、冻结检查、单项更新选择；自动部署默认关闭 | 首次完整 CD 成功，两个镜像推送和 Pulumi up 通过 | 真实单项更新保留效果仍待验收 |
+| Memoria 部署 | 源码／现成镜像模式、分支选择、版本记录及数据库／embedding 配置 | 源码模式部署通过，实际 Pod 在非 root／只读根文件系统下 Ready | 现成镜像模式与重启恢复仍待验收 |
+| Add/Search 部署 | Deployment、Service、journal PVC 和 `/ready` | PVC Bound；公网真实 Add/Search 七项最小联调通过 | 持久性、未知写入恢复及容量仍待验收 |
+| 数据库 | 专用用户／角色／共享库初始化及动态用户库授权 | 权限边界、共享及用户 schema 初始化、真实写入／检索通过 | 恢复及保留期限／物理清理仍待验收 |
+| GitHub 配置 | 运行凭据／环境变量配置，上海 embedding key 为必填 | 本次部署验证集群、Pulumi、ACR、数据库及应用认证链路 | 未来凭据轮换与权限变更重新验收 |
+| HTTPS | Ingress、Certificate 和证书 Ready 等待 | DNS 与入口匹配，证书 Ready，公网健康检查和 Add/Search 通过正常 TLS 校验 | 真实 SLB 长请求超时仍待验收 |
 
 离线 CI 证据为 [Actions run 37452656686](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37452656686)，对应 PR 分支版本 `c54dc53`，2026-10-06 两个 job 均为 Success。当前多库配置修复的本地完整 pytest 为 154 passed、1 warning，Ruff 通过；此前本地 Go 编译及 Helm 4.1.4 两组渲染也通过。容器构建的通过证据来自上述 CI 版本。该记录不证明镜像已发布或应用已上线。
 
-变更通过 `feat/aml-cicd` 分支向 `origin/main` 提交 PR，交付范围包括 `.github/`、`deploy/`、`/ready`、测试和本目录方案文档。Review 以 PR 完整 diff 为准；实际 dev 配置、凭据和本地运行产物已排除提交。
+交付范围包括 `.github/`、`deploy/`、`/ready`、测试和本目录方案文档；后续变更继续通过 PR
+交付到 `origin/main`。实际 dev 配置、凭据和本地运行产物排除提交。
 
 ### 源码导航
 
@@ -61,7 +66,7 @@ Review 使用源码、部署模板、非秘密配置及已记录的执行证据�
 ```mermaid
 flowchart LR
     AML["AML 客户端"] -->|HTTPS| NG["现有 NGINX 与应用 Ingress"]
-    subgraph APP["计划部署：aml-memory-benchmarks namespace"]
+    subgraph APP["已部署：aml-memory-benchmarks namespace"]
         A["Add/Search：aml:80"] --> M["Memoria：aml-memoria:8100"]
         A --> J["journal PVC：20Gi"]
         C["应用 Certificate 与 TLS Secret"]
@@ -146,6 +151,11 @@ Memoria 默认从源码 `main` 分支构建，由本项目 CD 部署，也可指
 专用用户、角色和数据库已创建，并通过该用户完成登录及库名回查。运行密码、独立 Memoria master key 和适配器 API key 位于 gitignore 排除的 `deploy/.runtime.env`，权限 `600`。管理员配置保留在用户指定文件，仅用于一次性初始化，不进入 Pod 或持续发布 Secret。数据库初始化不删除既有数据、不重设既有用户密码；恢复使用同一份凭据文件。
 
 Memoria 内部 Service 为 `aml-memoria:8100`；适配器使用该 Memoria 的 master key，并为 AML 用户映射稳定 owner。master key 与 AML 对外 API key 相互独立；向 AML 平台提供适配器 key。调用者携带 `Authorization: Bearer <AML_ADAPTER_API_KEY>` 并提交 `user_id`；适配器对 `[namespace, user_id]` 做稳定哈希，以内部 `Memoria-Owner` 认证和 `X-User-Id` 调用 Memoria。无需预注册 Memoria 用户或逐用户生成 API key；首次需要用户存储时由 DbRouter 按需创建用户库。SQL 运行用户仍须由部署初始化脚本预先准备。Add/Search 应保持相同 `user_id`；重试不能改变 owner 前缀或用户标识。
+
+接入说明以公网 Add/Search 为最小客户端边界，提供 curl 和 Python 标准库示例、请求字段及
+响应结构。普通客户端只持有适配器 key，不持有 Memoria master key、数据库或集群凭据。
+示例使用随机用户隔离演示数据，不自动清理；完整 `src.smoke` 才额外访问内部 Memoria，
+执行认证范围核对和测试记忆逻辑停用。示例用于接口联调，不替代正式 AML 重试、超时和评测契约。
 
 #### 数据库模式与部署兼容性
 

@@ -302,6 +302,25 @@ Pulumi output 和 Memoria Pod annotation 同时记录来源 repo／ref／commit�
 
 ## 发布流程
 
+### Actions 参数填写
+
+在本仓库 **Actions → AML Aliyun dev deployment → Run workflow** 操作。
+目前已有完整 dev 部署，后续使用同一 stack 更新已有服务；不用重新创建数据库或测试用户。
+
+| 场景 | workflow 分支 | operation | deployment_target | memoria_build_mode | memoria_ref |
+|---|---|---|---|---|---|
+| 首次部署／更新两个服务 | `main` | `deploy` | `both` | `source` | `main` 或指定 Memoria ref |
+| 只更新 Memoria | `main` | `deploy` | `memoria` | `source` | 指定 Memoria 分支、tag 或 SHA |
+| 只更新适配器 | `main` | `deploy` | `memory_benchmarks` | `configured`（此场景忽略） | 留空（此场景忽略） |
+| 预览上述变更 | `main` | `preview` | 对应范围 | 与实际发布一致 | 与实际发布一致 |
+
+workflow 的分支决定 `memory_benchmarks` 代码；`memoria_build_mode` 和 `memoria_ref`
+只控制 **Memoria**。`source` 从源码构建；`configured` 读取已配置模式（默认源码）；
+`image` 使用 `AML_MEMORIA_IMAGE` 的固定 digest 镜像。ref 留空时使用已配置来源，默认 `main`。
+输入 `deploy` 才实际更新应用；需要先检查变更时按下面的 preview／deploy 两步执行。
+
+### 执行步骤
+
 1. 将变更合入 `main`，填写上述 Secrets／Variables。
 2. Actions 中选择 **AML Aliyun dev deployment**，点击 **Run workflow**。
    workflow 分支选择 `main`，`operation` 选择 `preview`，`deployment_target` 选择 `both`，
@@ -404,6 +423,145 @@ kubectl --kubeconfig "$HOME/dev/unit-kubeconfig" -n aml-memory-benchmarks \
 `/health` 直接在事件循环检查存活；`/ready` 使用独立线程容量和 HTTP 连接检查 journal
 可读及 Memoria `/health`，每个 worker 最多一个检查，并发探针直接返回 503，不排队。
 ready 不验证运行 master key、数据库授权、embedding 或 Add/Search 质量。
+
+## 接入已部署的 Add/Search
+
+客户端只需要公网地址和 **`AML_ADAPTER_API_KEY`**，无需 kubeconfig、数据库密码或
+`MEMORIA_MASTER_KEY`，也无需预注册 Memoria 用户。运维从受控的 `deploy/.runtime.env`
+取得适配器 key 并提供给调用方；GitHub Secret 页面不能回读已保存的值。
+AML 平台配置 Add URL、Search URL 和该 key；你在本地联调也使用同样的接口。
+
+| 配置 | 值 |
+|---|---|
+| Add URL | `https://aml.cn-dev.matrixone.tech/add` |
+| Search URL | `https://aml.cn-dev.matrixone.tech/search` |
+| 认证 Header | `Authorization: Bearer <AML_ADAPTER_API_KEY>` |
+| Content-Type | `application/json` |
+| 交互式接口说明 | `https://aml.cn-dev.matrixone.tech/docs` |
+
+### curl：写入后检索
+
+先设置环境变量。示例 key 是占位符，不是实际凭据；运行时替换为自己的 key。
+每次独立演示生成新用户，避免与其他测试数据混在一起。
+
+```sh
+export AML_BASE_URL='https://aml.cn-dev.matrixone.tech'
+export AML_ADAPTER_API_KEY='<实际适配器 key>'
+export AML_DEMO_USER="aml-demo-$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+
+curl --fail-with-body -sS "$AML_BASE_URL/health"
+curl --fail-with-body -sS "$AML_BASE_URL/ready"
+
+curl --fail-with-body -sS --max-time 120 "$AML_BASE_URL/add" \
+  -H "Authorization: Bearer $AML_ADAPTER_API_KEY" \
+  -H 'Content-Type: application/json' \
+  --data-binary @- <<JSON
+{
+  "request_id": "eval:demo:conv-0:chunk-0",
+  "user_id": "$AML_DEMO_USER",
+  "session_id": "session-1",
+  "messages": [
+    {"role": "user", "content": "Orion project uses Rust for the server.", "timestamp": 1704067200000}
+  ]
+}
+JSON
+
+curl --fail-with-body -sS --max-time 120 "$AML_BASE_URL/search" \
+  -H "Authorization: Bearer $AML_ADAPTER_API_KEY" \
+  -H 'Content-Type: application/json' \
+  --data-binary @- <<JSON
+{"user_id": "$AML_DEMO_USER", "query": "What language does the Orion server use?", "top_k": 10}
+JSON
+```
+
+Add 成功返回 HTTP 200 和以下结构，三个 ID 与请求完全一致：
+
+```json
+{
+  "success": true,
+  "request_id": "eval:demo:conv-0:chunk-0",
+  "user_id": "<本次 AML_DEMO_USER>",
+  "session_id": "session-1"
+}
+```
+
+Search 返回记忆证据，不生成最终答案。以下为结构示意；ID、内容格式、分数和时间取决于
+实际后端结果，`score` 和 `created_at` 为可选字段，无匹配时返回 `{"data": []}`。
+
+```json
+{"data": [{"id": "<memory id>", "content": "<包含 Orion server uses Rust 的记忆证据>"}]}
+```
+
+### Python：只用标准库
+
+先设置上述 `AML_BASE_URL` 和 `AML_ADAPTER_API_KEY`，将下面保存为 `aml_demo.py`，
+运行 `python3 aml_demo.py`。它发送一条 Add 和一条 Search，不启动本地服务或评测。
+
+```python
+import json
+import os
+import time
+import uuid
+from urllib.request import Request, urlopen
+
+base = os.getenv("AML_BASE_URL", "https://aml.cn-dev.matrixone.tech").rstrip("/")
+api_key = os.environ["AML_ADAPTER_API_KEY"]
+run_id = uuid.uuid4().hex
+user_id = f"aml-demo:{run_id}:alice"
+
+
+def post(path, payload):
+    request = Request(
+        base + path,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urlopen(request, timeout=120) as response:
+        return json.load(response)
+
+
+add_payload = {
+    "request_id": f"eval:{run_id}:conv-0:chunk-0",
+    "user_id": user_id,
+    "session_id": "session-1",
+    "messages": [{
+        "role": "user",
+        "content": "Orion project uses Rust for the server.",
+        "timestamp": int(time.time() * 1000),
+    }],
+}
+print("Add:", json.dumps(post("/add", add_payload), ensure_ascii=False))
+print("Search:", json.dumps(post("/search", {
+    "user_id": user_id,
+    "query": "What language does the Orion server use?",
+    "top_k": 10,
+}), ensure_ascii=False))
+```
+
+### 请求字段与使用规则
+
+| 字段 | 要求／用途 |
+|---|---|
+| Add `request_id` | 必填非空字符串，整体视为不透明 ID；相同用户的不同写入使用不同 ID，原样重试保留 ID 和完整 payload |
+| `user_id` | Add/Search 均必填非空字符串，决定记忆归属；同一用户跨会话检索仍用相同值 |
+| Add `session_id` | 必填非空字符串，用于来源会话；Search 不需要它，不按会话限制检索 |
+| Add `messages` | 必填非空数组，每条包含 `role` 和 `content` |
+| message `role` | `user` 或 `assistant` |
+| message `content`、Search `query` | 非空文本，或非空的 `[{"type":"text","text":"..."}]` 数组；当前不接受图片 |
+| message `timestamp` | 可选，整数 Unix 毫秒，例如 `1704067200000`；不是秒或 ISO 字符串 |
+| Search `top_k` | 必填正整数，返回数量不超过此值；当前后端最多检索 100 条 |
+| Search `options` | 可选字符串数组；当前接受该字段，但不用于生成答案 |
+
+未知请求字段会被拒绝。相同 `user_id`／`request_id` 原样重试不会重复写入；
+同一 ID 改 payload 返回 400。最小示例没有自动重试或清理：新增写入会留在该随机用户下。
+需要完整的验证和测试记忆逻辑停用时，使用已有 `src.smoke` 并配置内部 Memoria 访问；
+它需要额外 master key，普通 Add/Search 客户端不需要。
+错误码和重试规则见[适配器说明](../agent_memory_leaderboard/README.md#retries-and-deployment-state)。
+示例客户端的 120 秒超时仅供小请求联调，不代表正式 AML 整批 Add 的总超时要求。
 
 ## 发布冻结与上线验收
 
