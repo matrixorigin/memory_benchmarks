@@ -113,9 +113,11 @@ def prepare_tags(_args: argparse.Namespace) -> None:
     )
     adapter_tag = (
         f"{adapter_repository}:aml-memory-adapter-{build_date}-{adapter_commit[:7]}"
-    )
+    ) if os.getenv("AML_DEPLOYMENT_TARGET", "both") != "memoria" else ""
     memoria_tag = ""
-    if os.environ["AML_MEMORIA_BUILD_MODE"] == "source":
+    if os.getenv("AML_DEPLOYMENT_TARGET", "both") == "memory_benchmarks":
+        pass
+    elif os.environ["AML_MEMORIA_BUILD_MODE"] == "source":
         memoria_repository = checked(
             ACR_PATTERN, os.environ["AML_MEMORIA_REPOSITORY"],
             "Memoria image repository must be a Hangzhou ACR repository",
@@ -163,13 +165,17 @@ def pin(args: argparse.Namespace) -> None:
             "Memoria source ref must be a branch, tag or commit SHA",
         )
         image = image_repository + "@" + digest
-    elif mode == "image":
+    elif mode in {"image", "reuse"}:
         image = checked(
             IMAGE_PATTERN, os.getenv("AML_MEMORIA_IMAGE", ""),
             "Memoria image must be pinned to repository@sha256:digest",
         )
+        if mode == "reuse":
+            repository = os.getenv("AML_MEMORIA_SOURCE_REPOSITORY", "")
+            source_ref = os.getenv("AML_MEMORIA_SOURCE_REF", "")
+            commit = os.getenv("AML_MEMORIA_SOURCE_COMMIT", "")
     else:
-        raise ValueError("Memoria build mode must be source or image")
+        raise ValueError("Memoria build mode must be source, image, or reuse")
 
     metadata = {
         "mode": mode, "source_repository": repository,
@@ -181,6 +187,7 @@ def pin(args: argparse.Namespace) -> None:
         "benchmark_commit": os.getenv("GITHUB_SHA", ""),
         "actions_run_id": os.getenv("GITHUB_RUN_ID", ""),
         "actions_run_attempt": os.getenv("GITHUB_RUN_ATTEMPT", ""),
+        "deployment_target": os.getenv("AML_DEPLOYMENT_TARGET", "both"),
     }
     if mode == "source":
         dockerfile = Path(__file__).resolve().parents[1] / "docker/memoria.Dockerfile"

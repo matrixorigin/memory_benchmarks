@@ -8,6 +8,11 @@ on:
         type: choice
         options: [preview, deploy]
         default: preview
+      deployment_target:
+        description: Update both services, Memoria only, or the memory_benchmarks adapter only
+        type: choice
+        options: [both, memoria, memory_benchmarks]
+        default: both
       memoria_build_mode:
         description: Use the configured mode, build Memoria from source, or use a pinned image
         type: choice
@@ -34,6 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
+      AML_DEPLOYMENT_TARGET: ${{ inputs.deployment_target || 'both' }}
       AML_FREEZE: ${{ vars.AML_FREEZE }}
       AML_EXPECTED_API_SERVER: ${{ vars.AML_EXPECTED_API_SERVER }}
       AML_EXPECTED_CLUSTER_UID: ${{ vars.AML_EXPECTED_CLUSTER_UID }}
@@ -65,7 +71,11 @@ jobs:
         run: python3 deploy/scripts/deployment_guard.py --operation "$AML_OPERATION"
       - name: Generate private target configuration
         run: python3 deploy/scripts/dev_config.py
+      - name: Select applications to update
+        id: target
+        run: python3 deploy/scripts/deployment_target.py plan
       - name: Select the Memoria source ref or pinned image
+        if: steps.target.outputs.update_memoria == 'true'
         id: memoria
         run: python3 deploy/scripts/memoria_image.py resolve --publish
       - name: Check out the selected Memoria source
@@ -96,7 +106,9 @@ jobs:
         with:
           version: v3.17.4
       - name: Install deployment helpers
-        run: uv venv .deploy-venv && uv pip install --require-hashes --only-binary=:all: --python .deploy-venv/bin/python -r deploy/requirements.txt
+        run: |
+          uv venv .deploy-venv
+          uv pip install --require-hashes --only-binary=:all: --python .deploy-venv/bin/python -r deploy/requirements.txt
       - name: Check required configuration
         shell: bash
         run: |
@@ -114,17 +126,23 @@ jobs:
           PY
       - name: Verify dev cluster, RBAC and storage
         run: .deploy-venv/bin/python deploy/scripts/preflight.py
+      - name: Retain the unselected deployed application
+        run: .deploy-venv/bin/python deploy/scripts/deployment_target.py reuse
       - name: Run offline checks
         working-directory: agent_memory_leaderboard
         run: |
           uv sync --locked
-          uv run ruff check src tests benchmarks ../deploy/scripts
+          uv run ruff check src tests benchmarks ../deploy/scripts ../deploy/tests
           uv run pytest -q
       - name: Build deployment program
         working-directory: deploy/pulumi
-        run: go build -mod=readonly -o /tmp/aml-pulumi .
+        run: |
+          go test -mod=readonly ./...
+          go build -mod=readonly -o /tmp/aml-pulumi .
       - name: Lint and render both chart variants
         run: python3 deploy/scripts/render_chart.py
+      - name: Test application update selection
+        run: .deploy-venv/bin/python -m unittest discover -s deploy/tests -v
       - name: Prepare project, date and commit image tags
         id: image_tags
         run: python3 deploy/scripts/memoria_image.py tags
@@ -135,6 +153,7 @@ jobs:
           username: ${{ secrets.NEW_ACR_USERNAME }}
           password: ${{ secrets.NEW_ACR_PASSWORD }}
       - name: Build and publish the adapter
+        if: steps.target.outputs.update_adapter == 'true'
         id: image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -171,6 +190,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Pin the adapter digest
+        if: steps.target.outputs.update_adapter == 'true'
         env:
           BUILT_DIGEST: ${{ steps.image.outputs.digest }}
         run: |
@@ -179,6 +199,8 @@ jobs:
           with open(os.environ['GITHUB_ENV'], 'a') as output:
               output.write('AML_ADAPTER_IMAGE=' + os.environ['AML_ADAPTER_REPOSITORY'] + '@' + os.environ['BUILT_DIGEST'] + '\n')
           PY
+      - name: Recheck the retained deployment before preview or update
+        run: .deploy-venv/bin/python deploy/scripts/deployment_target.py recheck
       - name: Preview the independent dev stack
         if: github.event_name == 'workflow_dispatch' && inputs.operation == 'preview'
         uses: pulumi/actions@8582a9e8cc630786854029b4e09281acd6794b58 # v6
@@ -213,4 +235,5 @@ jobs:
           path = os.getenv('KUBECONFIG', '')
           if path and Path(path).is_file() and Path(path).name.startswith('aml-dev-'):
               Path(path).unlink()
+          Path('deploy/.retained-values.json').unlink(missing_ok=True)
           PY

@@ -185,25 +185,30 @@ func main() {
 		if certificateIssuer == "" {
 			certificateIssuer = cfg.Require("certificateIssuer")
 		}
+		desiredValues := pulumi.Map{
+			"image":           pulumi.Map{"repository": pulumi.String(adapterRepo), "digest": pulumi.String(adapterDigest)},
+			"imagePullSecret": registry.Metadata.Name(), "authSecret": auth.Metadata.Name(), "stateClaim": state.Metadata.Name(),
+			"secretChecksum":  secretString(hex.EncodeToString(checksum[:])),
+			"namespacePrefix": pulumi.String(cfg.Require("ownerPrefix")),
+			"workers":         pulumi.Int(workers),
+			"memoria": pulumi.Map{
+				"sourceRepository": pulumi.String(sourceRepo), "sourceRef": pulumi.String(sourceRef), "sourceCommit": pulumi.String(sourceCommit),
+				"image": pulumi.Map{"repository": pulumi.String(memoriaRepo), "digest": pulumi.String(memoriaDigest)},
+				"url":   pulumi.String("http://aml-memoria:8100"), "secretName": auth.Metadata.Name(), "secretKey": pulumi.String("MASTER_KEY"),
+				"embeddingModel": pulumi.String(cfg.Require("embeddingModel")), "embeddingDim": pulumi.String(cfg.Require("embeddingDim")), "embeddingBaseURL": pulumi.String(cfg.Require("embeddingBaseURL")),
+			},
+			"ingress":     pulumi.Map{"enabled": pulumi.Bool(host != ""), "className": pulumi.String(cfg.Require("ingressClass")), "host": pulumi.String(host), "tlsSecret": pulumi.String(tlsSecret)},
+			"certificate": pulumi.Map{"issuer": pulumi.String(certificateIssuer)},
+		}
+		releaseValues, err := selectedReleaseValues(desiredValues)
+		if err != nil {
+			return err
+		}
 		_, err = helmv3.NewRelease(ctx, "aml-services", &helmv3.ReleaseArgs{
 			Name: pulumi.String("aml"), Namespace: pulumi.String(namespace),
 			Chart: pulumi.String("../chart"), CreateNamespace: pulumi.Bool(false),
 			Timeout: pulumi.Int(2400), MaxHistory: pulumi.Int(5), SkipAwait: pulumi.Bool(false),
-			Values: pulumi.Map{
-				"image":           pulumi.Map{"repository": pulumi.String(adapterRepo), "digest": pulumi.String(adapterDigest)},
-				"imagePullSecret": registry.Metadata.Name(), "authSecret": auth.Metadata.Name(), "stateClaim": state.Metadata.Name(),
-				"secretChecksum":  secretString(hex.EncodeToString(checksum[:])),
-				"namespacePrefix": pulumi.String(cfg.Require("ownerPrefix")),
-				"workers":         pulumi.Int(workers),
-				"memoria": pulumi.Map{
-					"sourceRepository": pulumi.String(sourceRepo), "sourceRef": pulumi.String(sourceRef), "sourceCommit": pulumi.String(sourceCommit),
-					"image": pulumi.Map{"repository": pulumi.String(memoriaRepo), "digest": pulumi.String(memoriaDigest)},
-					"url":   pulumi.String("http://aml-memoria:8100"), "secretName": auth.Metadata.Name(), "secretKey": pulumi.String("MASTER_KEY"),
-					"embeddingModel": pulumi.String(cfg.Require("embeddingModel")), "embeddingDim": pulumi.String(cfg.Require("embeddingDim")), "embeddingBaseURL": pulumi.String(cfg.Require("embeddingBaseURL")),
-				},
-				"ingress":     pulumi.Map{"enabled": pulumi.Bool(host != ""), "className": pulumi.String(cfg.Require("ingressClass")), "host": pulumi.String(host), "tlsSecret": pulumi.String(tlsSecret)},
-				"certificate": pulumi.Map{"issuer": pulumi.String(certificateIssuer)},
-			},
+			Values: releaseValues,
 		}, pulumi.Provider(provider), pulumi.DependsOn([]pulumi.Resource{auth, registry, state}))
 		if err != nil {
 			return err
@@ -213,6 +218,11 @@ func main() {
 		ctx.Export("memoriaService", pulumi.String("aml-memoria"))
 		ctx.Export("adapterImage", pulumi.String(values["AML_ADAPTER_IMAGE"]))
 		ctx.Export("memoriaImage", pulumi.String(values["AML_MEMORIA_IMAGE"]))
+		deploymentTarget := os.Getenv("AML_DEPLOYMENT_TARGET")
+		if deploymentTarget == "" {
+			deploymentTarget = "both"
+		}
+		ctx.Export("deploymentTarget", pulumi.String(deploymentTarget))
 		if sourceCommit != "" {
 			ctx.Export("memoriaSourceRepository", pulumi.String(sourceRepo))
 			ctx.Export("memoriaSourceRef", pulumi.String(sourceRef))

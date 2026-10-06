@@ -297,11 +297,15 @@ Pulumi output 和 Memoria Pod annotation 同时记录来源 repo／ref／commit�
 ## 发布流程
 
 1. 将变更合入 `main`，填写上述 Secrets／Variables。
-2. Actions 中选择 **AML Aliyun dev deployment** → `preview`。它先选择
+2. Actions 中选择 **AML Aliyun dev deployment**，点击 **Run workflow**。
+   workflow 分支选择 `main`，`operation` 选择 `preview`，`deployment_target` 选择 `both`，
+   `memoria_build_mode` 选择 `source`，`memoria_ref` 填 `main`。
+   它先选择
    Memoria 来源并检出源码，核对目标集群、权限和 StorageClass，运行离线检查，
    构建并发布适配器及所选 Memoria 镜像，再预览独立 Pulumi stack。
    **preview 也会发布镜像，并可能创建空的 Pulumi stack，但不创建 Kubernetes 应用资源。**
-3. 选择 `deploy` 执行发布。程序等待 Helm 和 Pod 就绪，单个 dev 发布串行执行。
+3. 再次点击 **Run workflow**，保持上述分支／来源参数，将 `operation` 改为 `deploy`
+   执行发布。程序等待 Helm 和 Pod 就绪，单个 dev 发布串行执行。
    任务入口和 `up` 前检查冻结，Pulumi 对真实更新也检查 `AML_FREEZE`。
    自动部署默认关闭，Actions 不调用真实 Add/Search 或启动基准／官方评测。
 4. 核对公网域名的 DNS 和 `AML_PUBLIC_HOST`（当前均已配置）。chart 创建应用自己的 `Certificate`，
@@ -310,6 +314,33 @@ Pulumi output 和 Memoria Pod annotation 同时记录来源 repo／ref／commit�
    NGINX 公网地址；2026-10-06 只读核实的地址是 `47.97.230.53`，以发布时实际值为准。
 5. 公网启用后的目标接口为 `https://<host>/add` 和 `https://<host>/search`。
    验收 DNS、证书、鉴权、真实写入检索、用户隔离、重启恢复和端到端时延后再参评。
+
+### 选择更新范围
+
+`deployment_target` 控制本次更新的应用，默认 `both`。`operation=preview`／`deploy` 均支持。
+
+| 选择 | 发布行为 |
+|---|---|
+| `both` | 更新 Memoria 和 memory_benchmarks 的 AML Add/Search 适配器；首次部署选择此项 |
+| `memoria` | 按 `memoria_build_mode`／`memoria_ref` 构建或选择 Memoria 镜像，复用当前适配器镜像和应用配置 |
+| `memory_benchmarks` | 构建并更新 AML 适配器，复用已部署 Memoria 的实际 digest、来源和应用配置；忽略 Memoria 构建参数 |
+
+单项更新需要已有完整的 `aml` Helm release 和两个 Deployment。流程从目标集群读取当前
+Helm values，核对实际镜像，保留未选应用的配置和共享 checksum；不会用仓库 Variable 中的
+旧镜像替代实际部署。构建结束、Pulumi 操作前再次核对现有配置，变化时停止并要求重新运行。
+
+当前共享数据库连接和认证／embedding key 必须与已部署 Secret 一致。要轮换这些配置，
+应选 `both`。chart 改动若会更新未选应用的 Deployment，也必须选 `both`。
+单项更新保留当前 Ingress、证书配置等共享 Helm values；共享资源配置更新使用 `both`。
+无需新增 Secrets。自动部署若启用仍默认 `both`，冻结规则对所有更新范围生效。
+
+Memoria 更新采用 Recreate，更新期间适配器进程可继续运行，但其 Add/Search 上游会暂时
+不可用；比赛评测期间仍应冻结发布。这里的 `memory_benchmarks` 指运行中的 AML 适配器，
+发布不会自动运行 benchmark 或官方评测。
+
+离线检查流程是 **AML offline CI**，不会部署应用。CI 使用固定版本
+`actionlint v1.7.7` 检查 workflow YAML 和 Actions 表达式。若部署流程仅显示文件路径、
+立即失败且没有 job，应先检查 workflow 文件语法；这种失败不会创建应用资源。
 
 NGINX 路由设置 1800 秒读／发送超时和关闭上游自动重试，以支持同步 Add。
 整个链路的 SLB、控制器限制和 AML 契约还要核实；这不构成已支持所有 30 分钟请求的证明。
