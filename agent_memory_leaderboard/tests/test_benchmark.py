@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from src import benchmark
-from src.benchmark import batches, evidence_score, summarize
+from src.benchmark import batches, evidence_prefix_scores, evidence_score, summarize
 from src.datasets import normalize
 
 
@@ -39,6 +39,14 @@ def test_recall_uses_exact_unique_evidence_and_excludes_unannotated_questions():
     assert evidence_score(["D1:1", "D1:2"], ["[dialogue:D1:1]", "[dialogue:D1:1]"]) == 0.5
     assert evidence_score(["D1:1"], ["[dialogue:D1:10]"]) == 0
     assert evidence_score([], ["[dialogue:D1:1]"]) is None
+
+
+def test_prefix_recall_preserves_order_unique_gold_and_unlabeled_questions():
+    contents = ["[dialogue:D1:1]", "[dialogue:D1:1]", "[dialogue:D2:3]"]
+    assert evidence_prefix_scores(["D1:1", "D2:3"], contents, 3) == {"1": 0.5, "3": 1}
+    assert evidence_prefix_scores([], contents, 3) == {"1": None, "3": None}
+    assert evidence_prefix_scores(["D1:1; D2:3"], contents, 3) == {"1": 0, "3": 0}
+    assert evidence_prefix_scores(["D2:3"], contents, 10) == {"1": 0, "5": 1, "10": 1}
 
 
 def test_longmemeval_strips_gold_and_preserves_roles_and_history():
@@ -133,7 +141,9 @@ def test_failed_ingestion_never_searches_and_resume_reuses_ids(
     assert question["sample_id"] == "sample"
     assert question["retrieved_evidence_ids"] == ["D1:1"]
     assert question["unmatched_gold_evidence"] == unmatched
+    assert question["evidence_recall_at_k"] == {"1": score}
     assert report["question_audit_version"] == 1
+    assert sum(path == "/search" for path, body in calls) == 1
 
 
 def test_interrupted_run_records_retention_deadline(tmp_path, monkeypatch):

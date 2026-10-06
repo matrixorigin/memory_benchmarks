@@ -55,6 +55,14 @@ def evidence_score(expected, contents):
     return len(expected & found) / len(expected)
 
 
+def evidence_prefix_scores(expected, contents, top_k):
+    """Recall of prefixes from this one Search response, without extra requests."""
+    cutoffs = sorted({1, 5, 10, 20, 50, 100, top_k})
+    return {
+        str(k): evidence_score(expected, contents[:k]) for k in cutoffs if k <= top_k
+    }
+
+
 def save(path, report):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     path.parent.chmod(0o700)
@@ -217,6 +225,9 @@ def run(args):
                                 question.get("evidence", []), contents
                             ),
                             "retrieved_evidence_ids": sorted(evidence_ids(contents)),
+                            "evidence_recall_at_k": evidence_prefix_scores(
+                                question.get("evidence", []), contents, args.top_k
+                            ),
                             "unmatched_gold_evidence": sorted(
                                 set(question.get("evidence", [])) - source_ids
                             ),

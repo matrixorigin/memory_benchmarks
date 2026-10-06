@@ -143,6 +143,24 @@ def execute():
     return outcome.returncode
 
 
+def prefix_metrics(questions):
+    values = {}
+    for record in questions:
+        for cutoff, recall in record.get("evidence_recall_at_k", {}).items():
+            values.setdefault(cutoff, [])
+            if recall is not None:
+                values[cutoff].append(recall)
+    return {
+        cutoff: {
+            "questions_with_evidence": len(recalls),
+            "mean_evidence_recall": sum(recalls) / len(recalls) if recalls else None,
+            "all_evidence_hit_rate": sum(r == 1 for r in recalls) / len(recalls)
+            if recalls else None,
+        }
+        for cutoff, recalls in sorted(values.items(), key=lambda item: int(item[0]))
+    }
+
+
 def metrics(questions):
     records = list(questions)
     recalls = [r["evidence_recall"] for r in records if r.get("evidence_recall") is not None]
@@ -155,6 +173,7 @@ def metrics(questions):
     )
     return {
         "processed_questions": len(records),
+        "evidence_recall_at_k": prefix_metrics(records),
         "searched_questions": sum("returned" in r for r in records),
         "skipped_questions": sum("skipped" in r for r in records),
         "empty_results": sum(r.get("returned") == 0 for r in records),
@@ -281,6 +300,20 @@ def summary():
         ("Dataset revision", selection.get("source", {}).get("revision")),
         ("Dataset SHA256", selection.get("source", {}).get("sha256")),
     ])
+    if prefixes := totals.get("evidence_recall_at_k"):
+        lines += ["", "### Recall of returned evidence prefixes", "",
+                  "Same Search responses, first K records; not separate smaller-top_k runs.", "",
+                  "| K | Labeled questions | Mean recall | All evidence hit rate |",
+                  "|---|---:|---:|---:|"]
+        for cutoff, stats in prefixes.items():
+            lines.append(
+                f"| {cell(cutoff)} | {stats['questions_with_evidence']} | "
+                f"{rounded(stats['mean_evidence_recall'])} | "
+                f"{rounded(stats['all_evidence_hit_rate'])} |"
+            )
+    elif report:
+        lines += ["", "Prefix recall is unavailable in this report; "
+                  "older question records do not contain ranked-prefix metrics."]
     if histories:
         lines += ["", "### By history", "",
                   "| History | Searched | Skipped | Labeled | Recall | All evidence hit rate | "

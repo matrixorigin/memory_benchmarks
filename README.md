@@ -167,6 +167,7 @@ for data provenance, metric definitions, timeout and resume behavior.
 | Metric | Range / direction | What it measures |
 |---|---|---|
 | Mean evidence recall | 0–1, higher is better | Average fraction of gold evidence retrieved for labeled questions |
+| Recall@K | 0–1, higher is better | Evidence recall from the first K returned records of the same Search response; new reports only |
 | All evidence hit rate | 0–1, higher is better | Fraction of labeled questions with all gold evidence retrieved |
 | Empty results | Count | Successful Search requests returning no evidence |
 | Mean returned evidence records | Count per successful Search | Retrieval volume; interpret recall alongside Top K and evidence budget |

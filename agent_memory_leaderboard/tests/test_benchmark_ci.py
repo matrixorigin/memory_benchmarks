@@ -24,6 +24,24 @@ def test_metrics_report_return_count_without_counting_skips():
     assert ci.metrics([{"returned": 100}])["evidence_audited_questions"] == 0
 
 
+def test_prefix_metrics_report_coverage_and_never_treat_unlabeled_as_zero():
+    result = ci.prefix_metrics([
+        {"evidence_recall_at_k": {"1": 0, "5": 1}},
+        {"evidence_recall_at_k": {"1": 1, "5": 1}},
+        {"evidence_recall_at_k": {"1": None, "5": None}},
+        {"returned": 100, "evidence_recall": 0},  # Legacy record without prefix metrics.
+        {"skipped": "multimodal"},
+    ])
+    assert result["1"]["questions_with_evidence"] == 2
+    assert result["1"]["mean_evidence_recall"] == 0.5
+    assert result["5"]["all_evidence_hit_rate"] == 1
+    assert ci.prefix_metrics([{"evidence_recall_at_k": {"1": None}}])["1"] == {
+        "questions_with_evidence": 0, "mean_evidence_recall": None,
+        "all_evidence_hit_rate": None,
+    }
+    assert ci.prefix_metrics([{"returned": 100}]) == {}
+
+
 def test_history_metrics_keep_unfinished_and_unassigned_records_visible():
     report = {
         "contract": {"conversations": ["first", "second", "unfinished"]},
@@ -116,12 +134,16 @@ def test_execute_uses_label_only_when_provided(tmp_path, monkeypatch, label):
     assert "synthetic-test-key" not in ci.SELECTION.read_text()
 
 
-def test_summary_renders_missing_version_and_history_breakdown(tmp_path, monkeypatch):
+@pytest.mark.parametrize("prefixes", [None, {"1": 0, "5": 1}])
+def test_summary_renders_missing_version_and_history_breakdown(tmp_path, monkeypatch, prefixes):
     workspace(tmp_path, monkeypatch)
     ci.write_json(ci.SELECTION, {"histories": 1, "top_k": 100, "runtime_label": None})
+    record = {"returned": 100, "evidence_recall": 1}
+    if prefixes is not None:
+        record["evidence_recall_at_k"] = prefixes
     ci.write_json(ci.REPORT, {
         "contract": {"kind": "locomo", "conversations": ["conv-26"]},
-        "questions": {"conv-26#q0001": {"returned": 100, "evidence_recall": 1}},
+        "questions": {"conv-26#q0001": record},
         "completed_adds": [], "status": "completed",
     })
     ci.summary()
@@ -132,3 +154,6 @@ def test_summary_renders_missing_version_and_history_breakdown(tmp_path, monkeyp
     assert "Not recorded" in markdown
     assert "### By history" in markdown
     assert "conv-26" in markdown
+    assert ("### Recall of returned evidence prefixes" in markdown) == (prefixes is not None)
+    if prefixes is None:
+        assert "Prefix recall is unavailable" in markdown
