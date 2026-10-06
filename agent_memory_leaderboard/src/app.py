@@ -33,6 +33,19 @@ def create_app(settings: Settings | None = None, *, client: httpx.Client | None 
         """Unauthenticated adapter liveness; does not assert Memoria readiness."""
         return {"status": "ok"}
 
+    @app.get("/ready")
+    def ready():
+        """Check journal availability and upstream liveness without writing memories."""
+        try:
+            with adapter.journal.connect() as db:
+                db.execute("SELECT key FROM requests LIMIT 1").fetchone()
+            response = http.get(f"{settings.memoria_url}/health", timeout=3)
+            if 200 <= response.status_code < 300:
+                return {"status": "ok"}
+        except (AdapterError, httpx.HTTPError):
+            pass
+        return JSONResponse(status_code=503, content={"status": "not_ready"})
+
     def authenticate(request: Request) -> None:
         if settings.api_key is None:
             return

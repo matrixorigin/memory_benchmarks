@@ -50,6 +50,21 @@ formal evaluation. Interactive endpoint documentation is at `/docs`.
 `GET /health` is unauthenticated and returns HTTP 200 with `{"status":"ok"}`.
 It checks adapter liveness, not Memoria/database/embedding readiness.
 
+`GET /ready` checks journal readability and the upstream Memoria health endpoint,
+without writing memories or invoking a model. It is a dependency-availability
+check, not evidence that Add/Search or the embedding provider works correctly.
+The deployment target is the Aliyun dev unit cluster, using a dedicated Memoria
+backend and database login. Local evaluation remains available.
+See [competition design](docs/competition-plan.md) for runtime scope and workload
+budgets. The offline CI checks code and builds the adapter and Memoria images
+without publishing or deploying them.
+The [dev deployment workflow](../deploy/README.md) defaults to building Memoria
+from its `main` branch; another branch, tag, commit, or existing image can be selected.
+It publishes the selected images and deploys both services by digest through an
+independent Pulumi stack, recording the actual source commit for each source build.
+Public access requires DNS; the existing cert-manager ClusterIssuer automatically
+issues and renews the TLS Secret.
+
 ## Contract verification
 
 Checked against the [English integration contract](https://agentmemories.ai/docs#doc-en-contract)

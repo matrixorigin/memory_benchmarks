@@ -1,0 +1,118 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-memoria
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aml-memoria
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aml-memoria
+        app.kubernetes.io/instance: {{ .Release.Name }}
+      annotations:
+        checksum/runtime-secrets: {{ .Values.secretChecksum | quote }}
+        {{- if .Values.memoria.sourceCommit }}
+        org.opencontainers.image.source: {{ printf "https://github.com/%s" .Values.memoria.sourceRepository | quote }}
+        org.opencontainers.image.revision: {{ .Values.memoria.sourceCommit | quote }}
+        memoria.matrixorigin.io/source-ref: {{ .Values.memoria.sourceRef | quote }}
+        {{- end }}
+    spec:
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      imagePullSecrets:
+        - name: {{ .Values.imagePullSecret }}
+      containers:
+        - name: memoria
+          image: "{{ required "memoria image repository is required" .Values.memoria.image.repository }}@{{ required "memoria image digest is required" .Values.memoria.image.digest }}"
+          imagePullPolicy: IfNotPresent
+          command: [memoria]
+          args: [serve]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: 8100
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.authSecret }}
+                  key: DATABASE_URL
+            - name: MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.authSecret }}
+                  key: MASTER_KEY
+            - name: MEMORIA_MULTI_DB
+              value: 'false'
+            - name: EMBEDDING_PROVIDER
+              value: openai
+            - name: EMBEDDING_MODEL
+              value: {{ .Values.memoria.embeddingModel | quote }}
+            - name: EMBEDDING_DIM
+              value: {{ .Values.memoria.embeddingDim | quote }}
+            - name: EMBEDDING_BASE_URL
+              value: {{ required "embedding base URL is required" .Values.memoria.embeddingBaseURL | quote }}
+            - name: EMBEDDING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.authSecret }}
+                  key: EMBEDDING_API_KEY
+            - name: RUST_LOG
+              value: info
+          resources:
+            {{- toYaml .Values.memoria.resources | nindent 12 }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 120
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            timeoutSeconds: 3
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            timeoutSeconds: 3
+            periodSeconds: 15
+          volumeMounts:
+            - name: temporary
+              mountPath: /tmp
+      volumes:
+        - name: temporary
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-memoria
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8100
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: aml-memoria
+    app.kubernetes.io/instance: {{ .Release.Name }}

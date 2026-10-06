@@ -1,0 +1,109 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  replicas: 1
+  progressDeadlineSeconds: 2400
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aml-adapter
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      annotations:
+        checksum/runtime-secrets: {{ .Values.secretChecksum | quote }}
+      labels:
+        app.kubernetes.io/name: aml-adapter
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 1800
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      imagePullSecrets:
+        - name: {{ .Values.imagePullSecret }}
+      containers:
+        - name: adapter
+          image: "{{ .Values.image.repository }}@{{ required "image.digest is required" .Values.image.digest }}"
+          imagePullPolicy: IfNotPresent
+          command: [uvicorn]
+          args:
+            - src.app:create_app
+            - --factory
+            - --host
+            - 0.0.0.0
+            - --port
+            - '8000'
+            - --workers
+            - {{ .Values.workers | quote }}
+            - --timeout-graceful-shutdown
+            - '1740'
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: '1'
+            - name: MEMORIA_URL
+              value: {{ required "memoria.url is required" .Values.memoria.url | quote }}
+            - name: MEMORIA_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "memoria.secretName is required" .Values.memoria.secretName }}
+                  key: {{ .Values.memoria.secretKey }}
+            - name: ADAPTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.authSecret }}
+                  key: ADAPTER_API_KEY
+            - name: ADAPTER_STATE_DIR
+              value: /app/var
+            - name: MEMORIA_NAMESPACE
+              value: {{ .Values.namespacePrefix | quote }}
+            - name: MEMORIA_TIMEOUT_SECONDS
+              value: {{ .Values.timeoutSeconds | quote }}
+          volumeMounts:
+            - name: state
+              mountPath: /app/var
+            - name: temporary
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            timeoutSeconds: 3
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            timeoutSeconds: 10
+            periodSeconds: 15
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ .Values.stateClaim }}
+        - name: temporary
+          emptyDir: {}
