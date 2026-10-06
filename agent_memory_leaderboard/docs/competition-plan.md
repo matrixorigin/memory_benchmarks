@@ -4,6 +4,12 @@
 
 团队在 [matrixorigin/memory_benchmarks](https://github.com/matrixorigin/memory_benchmarks) 共建参评适配、评测和部署工程，基于同事现有实现继续开展工作。本文是后续方案与设计决策的维护入口；更新有效章节，区分已实现、待实施和验证证据，不记录中间讨论。
 
+根目录 [README](../../README.md) 是新成员的项目入口，沿用英文，集中说明用途、当前架构、
+公网 Add/Search 最小示例、手动评测及部署步骤、数据集支持范围和指标语义。
+运维凭据／发布细节由 `deploy/README.md` 维护，评测参数／产物／保留规则由
+`benchmarks/CI.md` 维护，本文维护设计及验收状态。首页支持表区分可执行检索、接口诊断、
+未取得数据和未接入原生评分；不以数据集目录存在或 workflow 成功表述正式 AML 分数。
+
 此前独立的 Memoria `feat/aml-text-adapter` 分支、`aml-local-client` 和相关优化／评测计划停止推进。已有代码、PR、文档和结果保留为参考，不删除或关闭；不以完成旧计划或迁入旧实现作为新项目的前置条件。后续是否采用其中的代码或用例，由新项目的具体任务决定。
 
 ## CI/CD 交付概要与 Review 入口
