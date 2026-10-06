@@ -29,7 +29,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: agent_memory_leaderboard/uv.lock
       - run: uv sync --locked
-      - run: uv run ruff check src tests benchmarks ../deploy/scripts
+      - run: uv run ruff check src tests benchmarks ../deploy/scripts ../deploy/tests
       - run: uv run pytest -q
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
         with:
@@ -37,6 +37,12 @@ jobs:
       - name: Lint and render both chart variants
         working-directory: .
         run: python3 deploy/scripts/render_chart.py
+      - name: Test application update selection
+        working-directory: .
+        run: |
+          uv venv .deploy-venv
+          uv pip install --require-hashes --only-binary=:all: --python .deploy-venv/bin/python -r deploy/requirements.txt
+          .deploy-venv/bin/python -m unittest discover -s deploy/tests -v
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -54,6 +60,9 @@ jobs:
       - name: Compile Pulumi program
         working-directory: deploy/pulumi
         run: go build -mod=readonly -o /tmp/aml-pulumi .
+      - name: Test retained Pulumi release configuration
+        working-directory: deploy/pulumi
+        run: go test -mod=readonly ./...
   memoria-source:
     name: Build Memoria from source without publishing
     runs-on: ubuntu-latest

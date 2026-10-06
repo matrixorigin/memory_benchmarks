@@ -34,6 +34,7 @@
 | [dev CD](../../.github/workflows/aml-dev-deploy.yml) | 分支限制、并发、Secret 使用、镜像 digest、preview／deploy、证书等待及临时文件清理 |
 | [Memoria 来源配置](../../deploy/memoria-source.json)、[镜像选择与记录](../../deploy/scripts/memoria_image.py)、[构建 Dockerfile](../../deploy/docker/memoria.Dockerfile) | 默认 main、分支／tag／commit 选择、实际 SHA 与 digest、编译器／运行镜像和构建缓存 |
 | [Pulumi 程序](../../deploy/pulumi/main.go)、[配置模板](../../deploy/pulumi/Pulumi.new-dev.example.yaml)、[私有配置生成](../../deploy/scripts/dev_config.py) | 目标集群、私有标识、独立 stack、资源所有权、DSN 编码、Secret 传播、PVC 保护与 Helm 依赖 |
+| [更新范围选择](../../deploy/scripts/deployment_target.py)、[Pulumi 配置选择](../../deploy/pulumi/selection.go)、[选择回归用例](../../deploy/tests/test_deployment_target.py) | 首次完整发布、未选应用版本／配置保留、共享凭据与 chart 变动检查、构建后复查 |
 | [Memoria 模板](../../deploy/chart/templates/memoria.yaml) | 镜像入口、非 root／只读文件系统、显式多库、共享库连接与授权、模型环境变量及健康探针 |
 | [适配器模板](../../deploy/chart/templates/deployment.yaml)、[Service](../../deploy/chart/templates/service.yaml) | 单副本 Recreate、journal 挂载、Secret checksum、请求结束与重启行为 |
 | [Ingress](../../deploy/chart/templates/ingress.yaml)、[Certificate](../../deploy/chart/templates/certificate.yaml) | NGINX 路由、长请求配置、TLS Secret 名和现有 ClusterIssuer 的引用 |
@@ -224,6 +225,33 @@ PR、main push 或手动触发 **AML offline CI** 时，执行依赖锁定安装
 ### dev CI/CD
 
 发布流程选择 Memoria 来源并在源码模式下 checkout、记录实际 commit；核对 kubeconfig 的 API Server、集群 UID、权限和 StorageClass，再运行离线检查、构建及推送适配器与所选 Memoria 镜像，然后 preview／up 独立 Pulumi stack。benchmark workflow 手动入口仅接受本仓库 main 分支，Memoria 来源 ref 可以独立选择；main push 自动部署默认关闭，通过 `AML_DEV_CD_ENABLED=true` 显式开启。preview 会发布镜像并可能初始化空的 Pulumi stack，但不创建 Kubernetes 应用资源。发布任务串行执行，不中断正在进行的 dev 发布。
+
+#### 独立应用更新
+
+手动发布增加 `deployment_target=both|memoria|memory_benchmarks`，默认 `both`。
+`memory_benchmarks` 指本项目提供的 AML Add/Search 适配器。首次部署选择 `both`；
+后续可单独更新任一服务，`preview` 和 `deploy` 使用相同选择逻辑。
+
+未选应用的实际镜像 digest、来源元数据和应用配置从当前 Helm release 读取；
+核对 Deployment 镜像后保存非凭据配置快照。Pulumi 以已部署 values 为基础，只替换所选
+应用的字段，保留另一项及共享配置。仅更新 Memoria 时保留适配器连接 URL 和 key 引用；
+仅更新适配器时跳过 Memoria checkout／构建，并以 `reuse` 记录原来源。首次环境没有完整
+release 时拒绝单项更新，不根据旧 Variable 猜测当前版本。
+
+共享数据库连接、master key、adapter key 和 embedding key 若有变动，要求选择 `both`。
+未选 Deployment 的旧 manifest 与当前 chart 使用旧 values 的渲染结果必须一致，避免
+chart 改动意外更新另一项。构建完成后、Pulumi 操作前复查快照；变化时停止并要求重新运行。
+快照权限为 `600`，不含原始运行凭据，忽略提交并在 workflow 结束清理。共享 Ingress／证书
+等 Helm 配置在单项更新时保留，变更时使用 `both`。独立更新无需新增 Secret。
+
+所有模式仍使用同一 Pulumi stack、namespace 和 Helm release，保留串行发布与冻结规则；
+自动发布启用后仍默认更新两项。独立更新控制应用版本和配置，不使用 Pulumi resource
+`--target` 裁剪资源图。Memoria Recreate 期间上游会暂时不可用，适配器 Pod 保留不代表
+Add/Search 全程可用，比赛评测期间仍须冻结发布。
+
+离线验证覆盖选择分支、已部署版本复用、共享凭据变更拒绝、未选应用 chart 变动拒绝、
+构建期间配置变化拒绝、首次 `both` 和 Pulumi 配置保留。真实单项部署及实际 Pod 的保留
+效果仍需在初次完整部署后验收。
 
 `KUBECONFIG` Secret 使用阿里云 dev unit 的完整原始 YAML，不做 base64 编码，不填写文件路径；原有 AWS 配置不能用于该目标。工作流使用既有 `PULUMI_TOKEN`、组织 ACR Secret 和新建运行凭据。复用现有 DNS solver 时无需新增阿里云 RAM AK；域名入口解析由运维配置，证书由 cert-manager 自动管理。变量、Secret、初始化和操作步骤见 [dev 发布说明](../../deploy/README.md)。
 
