@@ -54,13 +54,18 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.authSecret }}
                   key: DATABASE_URL
+            - name: MEMORIA_SHARED_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.authSecret }}
+                  key: DATABASE_URL
             - name: MASTER_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.authSecret }}
                   key: MASTER_KEY
             - name: MEMORIA_MULTI_DB
-              value: 'false'
+              value: '1'
             - name: EMBEDDING_PROVIDER
               value: openai
             - name: EMBEDDING_MODEL

@@ -7,20 +7,21 @@ CI/CD、Helm chart 和 Pulumi 程序全部在 `memory_benchmarks` 维护。
 
 部署配置已编写，**Memoria 和适配器尚未实际部署**。专用数据库用户／角色／库和
 GitHub 运行凭据已准备，公网域名已配置并核实。
-[离线 CI run 37449805528](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37449805528)
-对应 PR 分支版本 `3ad3acc`，Ruff、pytest（152 passed、1 warning）、Helm 3.17.4 两组
+[离线 CI run 37452656686](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37452656686)
+对应 PR 分支版本 `c54dc53`，Ruff、pytest（154 passed、1 warning）、Helm 3.17.4 两组
 lint／template、适配器／Memoria 源码镜像构建及 Go 编译均通过，不推送镜像或部署。
-当前探针修复的本地完整 pytest 为 154 passed、1 warning，Ruff 通过；此前本地 Go 编译
+当前多库配置修复的本地完整 pytest 为 154 passed、1 warning，Ruff 通过；此前本地 Go 编译
 及 Helm 4.1.4 两组渲染也通过。本地未运行容器构建。
 CD、Pulumi preview／up、真实 Add/Search 及公网验收尚未执行；后续提交检查以 PR checks 为准。
 Memoria 默认从 `matrixorigin/memoria` 的 `main` 分支构建，
 也支持选择其他分支、tag、commit 或已发布镜像；实际部署始终使用镜像 digest。
 CI 源码构建已通过，未修改 Memoria 源码；镜像发布和实际运行仍待验收。
 
-**当前发布前仍须修正数据库模式与授权。** 默认 Memoria 源码有意采用多库与自动迁移；
-模板的 `MEMORIA_MULTI_DB=false` 不能强制单库，当前仅授权 `aml_memoria` 的账号不满足
-运行需求。应按专用共享库与用户库配置权限，并验收首次用户写入后再发布。
-控制项及上游设计依据见[数据库模式与部署兼容性](../agent_memory_leaderboard/docs/competition-plan.md#数据库模式与部署兼容性)。
+Memoria 显式采用多库模式：`DATABASE_URL` 与 `MEMORIA_SHARED_DATABASE_URL` 指向同一
+专用共享库 `aml_memoria`，`MEMORIA_MULTI_DB=1`。初始化脚本为专用角色授予共享库权限及
+`CREATE DATABASE ON ACCOUNT *`；用户库由 Memoria 按需创建并由该角色拥有。
+首次真实用户 Add/Search、完整 schema 和模型调用仍须在部署后验收。
+控制项与权限边界见[数据库模式与部署兼容性](../agent_memory_leaderboard/docs/competition-plan.md#数据库模式与部署兼容性)。
 
 完整方案、交付状态、源码导航和 Review 重点见
 [CI/CD 交付概要与 Review 入口](../agent_memory_leaderboard/docs/competition-plan.md#cicd-交付概要与-review-入口)。
@@ -35,8 +36,8 @@ CI 源码构建已通过，未修改 Memoria 源码；镜像发布和实际运�
 | Memoria | 单副本，内部 Service `aml-memoria:8100` |
 | Add/Search 适配器 | 单副本，内部 Service `aml:80`；公网由 NGINX Ingress 接入 |
 | journal | `aml-adapter-state` PVC，20Gi，`alicloud-disk-essd-pl0`，RWO |
-| 数据库 | 现有 dev MatrixOne 租户下的专用 `aml_memoria` 数据库 |
-| 数据库用户／角色 | `aml_memoria`／`aml_memoria_role`，权限限制在该数据库 |
+| 数据库 | 专用共享库 `aml_memoria`，以及 Memoria 按需创建的 `mem_u_<hash>` 用户库 |
+| 数据库用户／角色 | `aml_memoria`／`aml_memoria_role`，共享库权限＋建库权限＋新建对象所有权 |
 
 私有 `new-dev` 配置固定了 API Server 和 `kube-system` UID，阻止误用 AWS 或控制面
 kubeconfig。此 stack 管理新建的应用资源，复用 unit 集群、MatrixOne 和 NGINX。
@@ -81,8 +82,30 @@ API key 保存为 `deploy/.runtime.env`，权限 `600`。文件已被 gitignore 
 单独恢复或轮换。登录失败会提示保留原文件并检查密码／角色，不要删除后盲目重跑。
 
 这里的独立账号指 **数据库登录用户**。现有连接属于一个 MatrixOne 租户；本方案没有
-新建整个租户。角色拥有专用库和其表上的权限，不授予 `accountadmin`。
+新建整个租户。角色拥有共享库和其表上的权限，以及租户级 `CREATE DATABASE` 权限。
+运行时新建的用户库和表归该角色所有；不授予 `accountadmin`、全局表权限或租户级删库权限。
+建库权限不能限制为某个名称前缀，owner 前缀也不是 SQL 权限边界；该用户可以创建其他新库，
+但不应访问其他角色拥有的业务数据。计算资源仍共用；若需要租户级权限／容量隔离，应另建
+MatrixOne account。重复运行上述初始化命令可补齐授权，原有密码和两个 API key 保持不变。
 权限语法参见 [MatrixOne GRANT](https://docs.matrixorigin.cn/en/v26.3.0.13/MatrixOne/Reference/SQL-Reference/Data-Control-Language/grant/)。
+
+2026-10-06 已用现有凭据重跑初始化并验证：共享库重复创建、新建自有库／表、CRUD、
+ALTER、索引与自有库删除成功；另一个管理员角色拥有的临时库的读取、更新、删除均被拒绝。
+验证仅使用合成数据，临时库已清理。完整 Memoria schema 和首次 Add/Search 仍待部署验收。
+
+### 测试用户与认证
+
+通过适配器测试无需预注册 Memoria 用户，也无需为每位 AML 用户生成 Memoria API key。
+客户端提供 `Authorization: Bearer <AML_ADAPTER_API_KEY>` 以及请求体中的 `user_id`。
+适配器将 `[namespace, user_id]` 稳定哈希为 owner，使用内部
+`Authorization: Memoria-Owner <AML_MEMORIA_MASTER_KEY>` 和 `X-User-Id: <owner>` 调用
+Memoria；首次访问需要存储的用户时，Memoria 按需初始化用户库和 schema。
+
+同一测试用户的 Add/Search 必须使用相同 `user_id`，跨会话可检索该用户的记忆。
+更换 `user_id` 会进入另一用户范围；不要在重试时改变 `user_id` 或部署 owner 前缀。
+AML auth key 验证调用方，`user_id` 决定数据归属，二者不能互相替代。
+`AML_MEMORIA_MASTER_KEY` 和 SQL 密码仅用于内部服务，不交给 AML。
+部署前仍须执行专用 SQL 用户／角色／共享库初始化；这与创建测试用户是两件事。
 
 ## GitHub Actions 配置
 

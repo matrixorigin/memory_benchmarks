@@ -14,15 +14,15 @@
 
 | 部分 | 代码／配置状态 | 已执行的工作 | 待验证／待完成 |
 |---|---|---|---|
-| 离线 CI | 已编写 Ruff、pytest、Helm lint／template、适配器／Memoria 源码镜像构建、Go Pulumi 编译；八个健康探针用例 | Actions 两个 job 均通过，pytest 为 152 passed、1 warning；Helm 3.17.4 两组检查及两个镜像构建通过 | CI 不推送镜像或部署；后续提交检查以 PR checks 为准 |
+| 离线 CI | 已编写 Ruff、pytest、Helm lint／template、适配器／Memoria 源码镜像构建、Go Pulumi 编译；八个健康探针用例 | Actions 两个 job 均通过，pytest 为 154 passed、1 warning；Helm 3.17.4 两组检查及两个镜像构建通过 | CI 不推送镜像或部署；后续提交检查以 PR checks 为准 |
 | dev CD | 已编写 main 手动 preview／deploy、冻结检查；自动部署默认关闭 | 目标集群身份、存储、现有入口已只读核实；三个私有环境 Variables 已上传 | 未运行 CD Actions、Pulumi preview／up；发布凭据实际权限未验证 |
-| Memoria 部署 | 已编写源码／现成镜像模式、分支选择、构建与版本记录、Deployment、Service、Secret 及数据库／embedding 配置 | CI 源码构建通过；已核实上游默认多库及自动迁移设计 | 当前模板的单库假设与上游不兼容，须修正部署配置和授权；尚未创建 Pod |
+| Memoria 部署 | 已编写源码／现成镜像模式、分支选择、构建与版本记录、Deployment、Service、Secret 及数据库／embedding 配置 | CI 源码构建通过；已核实上游默认多库及自动迁移设计 | 显式多库、专用共享库与动态用户库授权已配置；尚未创建 Pod |
 | Add/Search 部署 | 已编写 Deployment、Service、journal PVC 和 `/ready` | 准备稳定 owner 前缀及独立认证 key | 未部署或运行真实 Add/Search；持久性和恢复未验收 |
-| 数据库 | 初始化脚本已编写 | 已创建 `aml_memoria` 用户、`aml_memoria_role` 角色和 `aml_memoria` 库；完成新用户登录及库名回查 | Memoria schema 初始化和实际存储／检索权限未验收 |
+| 数据库 | 初始化脚本已编写 | 已创建 `aml_memoria` 用户、`aml_memoria_role` 角色和 `aml_memoria` 库；完成新用户登录及库名回查 | 建库／DDL／CRUD 及其他角色测试库的拒绝访问已验证；完整 Memoria schema／检索待验收 |
 | GitHub 配置 | 凭据／环境变量上传脚本已编写，上海 embedding key 为必填 | 六个必需 Repository Secrets 均存在，两个组织 ACR Secrets 可用，镜像和三个私有环境 Variables 已配置；无 key 模型探针返回 401 | Pulumi／ACR 实际权限及带 key 的 embedding 调用待验收 |
 | HTTPS | 已编写 Ingress、Certificate 和证书 Ready 等待步骤 | 已核实 NGINX、cert-manager、生产 Issuer；`AML_PUBLIC_HOST` 已设置，公共 DNS 解析为 `47.97.230.53`，与 NGINX 入口一致 | 尚无应用 Ingress；未申请证书或验收公网 HTTPS |
 
-离线 CI 证据为 [Actions run 37449805528](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37449805528)，对应 PR 分支版本 `3ad3acc`，2026-10-06 两个 job 均为 Success。当前探针隔离修复的本地完整 pytest 为 154 passed、1 warning，Ruff 通过；此前本地 Go 编译及 Helm 4.1.4 两组渲染也通过。容器构建的通过证据来自上述 CI 版本。该记录不证明镜像已发布或应用已上线。
+离线 CI 证据为 [Actions run 37452656686](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37452656686)，对应 PR 分支版本 `c54dc53`，2026-10-06 两个 job 均为 Success。当前多库配置修复的本地完整 pytest 为 154 passed、1 warning，Ruff 通过；此前本地 Go 编译及 Helm 4.1.4 两组渲染也通过。容器构建的通过证据来自上述 CI 版本。该记录不证明镜像已发布或应用已上线。
 
 变更通过 `feat/aml-cicd` 分支向 `origin/main` 提交 PR，交付范围包括 `.github/`、`deploy/`、`/ready`、测试和本目录方案文档。Review 以 PR 完整 diff 为准；实际 dev 配置、凭据和本地运行产物已排除提交。
 
@@ -34,7 +34,7 @@
 | [dev CD](../../.github/workflows/aml-dev-deploy.yml) | 分支限制、并发、Secret 使用、镜像 digest、preview／deploy、证书等待及临时文件清理 |
 | [Memoria 来源配置](../../deploy/memoria-source.json)、[镜像选择与记录](../../deploy/scripts/memoria_image.py)、[构建 Dockerfile](../../deploy/docker/memoria.Dockerfile) | 默认 main、分支／tag／commit 选择、实际 SHA 与 digest、编译器／运行镜像和构建缓存 |
 | [Pulumi 程序](../../deploy/pulumi/main.go)、[配置模板](../../deploy/pulumi/Pulumi.new-dev.example.yaml)、[私有配置生成](../../deploy/scripts/dev_config.py) | 目标集群、私有标识、独立 stack、资源所有权、DSN 编码、Secret 传播、PVC 保护与 Helm 依赖 |
-| [Memoria 模板](../../deploy/chart/templates/memoria.yaml) | 镜像入口、非 root／只读文件系统、待修正的数据库模式与授权、模型环境变量及健康探针 |
+| [Memoria 模板](../../deploy/chart/templates/memoria.yaml) | 镜像入口、非 root／只读文件系统、显式多库、共享库连接与授权、模型环境变量及健康探针 |
 | [适配器模板](../../deploy/chart/templates/deployment.yaml)、[Service](../../deploy/chart/templates/service.yaml) | 单副本 Recreate、journal 挂载、Secret checksum、请求结束与重启行为 |
 | [Ingress](../../deploy/chart/templates/ingress.yaml)、[Certificate](../../deploy/chart/templates/certificate.yaml) | NGINX 路由、长请求配置、TLS Secret 名和现有 ClusterIssuer 的引用 |
 | [集群检查](../../deploy/scripts/preflight.py) | API Server／UID 校验、权限与存储检查、域名范围和 Issuer Ready 条件 |
@@ -66,7 +66,7 @@ flowchart LR
         C["应用 Certificate 与 TLS Secret"]
     end
     NG --> A
-    M --> DB["现有 MatrixOne：专用共享库与用户库（待配置）"]
+    M --> DB["现有 MatrixOne：专用共享库与动态用户库"]
     M --> EMB["上海 BAAI/bge-m3 服务"]
     CM["现有 cert-manager 与 ClusterIssuer"] --> C
     C --> NG
@@ -140,11 +140,11 @@ Memoria 默认从源码 `main` 分支构建，由本项目 CD 部署，也可指
 
 ### 数据库、认证与模型
 
-用户提供的连接属于现有 MatrixOne 租户的 `admin:accountadmin`。已完成的初始化在该租户内创建独立 **SQL 登录用户** `aml_memoria`、角色 `aml_memoria_role` 和数据库 `aml_memoria`；当前角色权限限定在该数据库及其表，运行用户名明确选择专用角色。这里没有新建整个 MatrixOne account／租户。该授权范围尚不满足当前 Memoria 多库运行要求，须在部署前调整并验收。租户账号与数据库用户的权限模型见 [MatrixOne GRANT](https://docs.matrixorigin.cn/en/v26.3.0.13/MatrixOne/Reference/SQL-Reference/Data-Control-Language/grant/)。
+现有 dev MatrixOne 租户内使用独立 **SQL 登录用户** `aml_memoria`、角色 `aml_memoria_role` 和共享库 `aml_memoria`。运行用户名显式选择该角色；不新建整个 MatrixOne account。管理员凭据仅用于本地初始化。角色拥有共享库及其表的权限，并具有 `CREATE DATABASE ON ACCOUNT *`，以支持 Memoria 动态创建用户库。新库及表由创建时的运行角色拥有，不授予 `accountadmin`、全局表读写或租户级删库权限。权限模型见 [MatrixOne GRANT](https://docs.matrixorigin.cn/en/v26.3.0.13/MatrixOne/Reference/SQL-Reference/Data-Control-Language/grant/)。
 
 专用用户、角色和数据库已创建，并通过该用户完成登录及库名回查。运行密码、独立 Memoria master key 和适配器 API key 位于 gitignore 排除的 `deploy/.runtime.env`，权限 `600`。管理员配置保留在用户指定文件，仅用于一次性初始化，不进入 Pod 或持续发布 Secret。数据库初始化不删除既有数据、不重设既有用户密码；恢复使用同一份凭据文件。
 
-Memoria 内部 Service 为 `aml-memoria:8100`；适配器使用该 Memoria 的 master key，并为 AML 用户映射稳定 owner。master key 与 AML 对外 API key 相互独立；向 AML 平台提供适配器 key。部署须按上游多库架构规划专用共享库、用户库及权限边界；不能将仅授权一个数据库视为完整的隔离与运行方案，计算容量仍可能共享。
+Memoria 内部 Service 为 `aml-memoria:8100`；适配器使用该 Memoria 的 master key，并为 AML 用户映射稳定 owner。master key 与 AML 对外 API key 相互独立；向 AML 平台提供适配器 key。调用者携带 `Authorization: Bearer <AML_ADAPTER_API_KEY>` 并提交 `user_id`；适配器对 `[namespace, user_id]` 做稳定哈希，以内部 `Memoria-Owner` 认证和 `X-User-Id` 调用 Memoria。无需预注册 Memoria 用户或逐用户生成 API key；首次需要用户存储时由 DbRouter 按需创建用户库。SQL 运行用户仍须由部署初始化脚本预先准备。Add/Search 应保持相同 `user_id`；重试不能改变 owner 前缀或用户标识。
 
 #### 数据库模式与部署兼容性
 
@@ -161,7 +161,13 @@ Memoria 内部 Service 为 `aml-memoria:8100`；适配器使用该 Memoria 的 m
 
 已核对 `memoria-website/memoria_aws` 的部署模板：显式设置 `MEMORIA_MULTI_DB=1`，并将 `DATABASE_URL` 和 `MEMORIA_SHARED_DATABASE_URL` 配成同一共享库连接。该事实来自部署源码，不代表本次读取了线上 Pod 的实际配置。
 
-**当前部署阻塞项在本项目配置与授权。** 模板仍设置 `MEMORIA_MULTI_DB=false`，且 SQL 角色只授权 `aml_memoria`；与默认源码的多库需求不兼容。修复需要明确共享库、动态用户库的创建／访问权限及隔离范围，并验证新用户首次写入；仅增加共享库 URL 或将开关设为 `true` 不足以证明授权完整。尚未执行权限扩展、迁移或应用部署。
+部署显式设置 `MEMORIA_MULTI_DB=1`，`DATABASE_URL` 和 `MEMORIA_SHARED_DATABASE_URL` 引用同一 Secret 中的专用 `aml_memoria` 连接，避免使用默认 `memoria_shared` 或触发旧库迁移。Memoria 根据 owner 派生 `mem_u_<16位hash>` 用户库；SQL 连接持续使用专用角色，由它创建库、初始化表并获得对象所有权。初始化脚本可幂等补齐建库授权，保留现有运行密码和 API key。
+
+**权限边界：** `CREATE DATABASE` 是租户级建库能力，无法仅授权 `mem_u_` 前缀。该角色可以新建其他名称的数据库；namespace／owner 哈希用于应用数据分区，不构成 SQL 名称限制。现有非授权业务库的数据仍应不可访问，计算容量和租户资源仍共用。需要硬性租户隔离时应另建 MatrixOne account；本方案不宣称已有完整租户隔离。
+
+2026-10-06 已在指定 dev MatrixOne（报告版本 `v4.2.0`）幂等补齐授权，保留原凭据。使用专用角色验证共享库 `CREATE DATABASE IF NOT EXISTS`、新建临时用户库／表、CRUD、ALTER、索引和自有库删除；读取、更新及删除管理员角色创建的另一个临时库均被拒绝（错误码 `20101`）。仅使用随机命名的测试库和合成数据，结束后已清理，未读取其他业务库。该检查证明本次所测 SQL 操作和权限边界，不代表所有 Memoria 功能均已验证。
+
+完整 Memoria schema、首次用户 Add/Search 和重启恢复仍须通过真实镜像验收。权限检查不替代 HTTP 路径、embedding 或质量评测。本 PR 只调整比赛项目的部署配置和初始化授权，不修改 Memoria 的数据库路由或启动语义。
 
 embedding 默认沿用 gitops dev 配置：上海 OpenAI-compatible `BAAI/bge-m3`、1024 维。其网络、认证、预算及真实检索质量需要联调确认；当前发布配置不要求 LLM 或 rerank，实际 Add/Search 路径没有调用 Answer/Eval 或 Observe 抽取。镜像均固定 digest，不混用不同 embedding 模型的既有向量。
 
@@ -293,6 +299,6 @@ CI 只构建 `linux/amd64` 而不推送；CD 构建并推送至指定 Hangzhou A
 
 Memoria 默认源码构建与来源分支选择已接入 CI/CD，默认 ref 为 `main`；源码 CI 构建已通过，尚未推送新镜像。现成镜像模式保留 gitops dev 已保存且固定 digest 的版本用于可选发布，实际 API／数据库运行兼容性和 embedding 可用性均尚未验收。
 
-代码与配置通过本分支 PR 交付；应用资源尚未部署，公网域名 `aml.cn-dev.matrixone.tech` 已解析到 NGINX 公网入口，证书尚未申请。冻结、worker 参数、Helm 检查、ready 用例、依赖锁定、私有配置和初始化恢复保护已编写；离线 CI 的 Ruff、152 个 pytest 用例、Helm 3.17.4 两组检查、两个镜像构建及 Go 编译均通过。探针隔离修复的本地完整 pytest 为 154 项通过。数据库单库假设尚须按上游多库架构修正；真实 Add/Search 和基准尚未运行，真实镜像只读运行、公网长请求和数据库恢复行为仍待验收。正式发布及质量验收需分别完成。
+代码与配置通过本分支 PR 交付；应用资源尚未部署，公网域名 `aml.cn-dev.matrixone.tech` 已解析到 NGINX 公网入口，证书尚未申请。冻结、worker 参数、Helm 检查、ready 用例、依赖锁定、私有配置和初始化恢复保护已编写；离线 CI 的 Ruff、154 个 pytest 用例、Helm 3.17.4 两组检查、两个镜像构建及 Go 编译均通过。探针隔离修复的本地完整 pytest 为 154 项通过。多库模板与初始化授权已修正；真实 Add/Search 和基准尚未运行，真实镜像只读运行、公网长请求和数据库恢复行为仍待验收。正式发布及质量验收需分别完成。
 
 后续代码和实验通过本项目任务／PR 共建。旧独立 Memoria 路径未迁入；既有核实结论见 [Issue #1 独立修正评论](https://github.com/matrixorigin/memory_benchmarks/issues/1#issuecomment-5987006462)。

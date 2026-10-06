@@ -1,4 +1,4 @@
-"""Create a database-scoped Memoria login; admin credentials stay local."""
+"""Create a Memoria multi-db login; admin credentials stay local."""
 
 import argparse
 import json
@@ -125,7 +125,8 @@ def main() -> None:
     if admin["host"] != "freetier-01.cn-hangzhou.cluster.cn-dev.matrixone.tech":
         raise ValueError("Admin connection must use the expected Aliyun dev MatrixOne endpoint")
     if not args.apply:
-        print("Configuration parsed. --apply creates aml_memoria and its database-scoped role")
+        print("Configuration parsed. --apply grants shared-db access and CREATE DATABASE "
+              "to the dedicated AML role (new user databases are owned by this role)")
         return
     args.output.parent.mkdir(parents=True, exist_ok=True)
     runtime = load_runtime(args.output) if args.output.exists() else None
@@ -170,6 +171,10 @@ def main() -> None:
                 )
             cursor.execute(f"GRANT ALL ON DATABASE `{database}` TO `{role}`")
             cursor.execute(f"GRANT ALL ON TABLE `{database}`.* TO `{role}`")
+            # DbRouter creates mem_u_<hash> databases with this active role.
+            # Ownership provides access to its new objects; never grant *.* table
+            # access, accountadmin, or account-wide DROP DATABASE.
+            cursor.execute(f"GRANT CREATE DATABASE ON ACCOUNT * TO `{role}`")
             cursor.execute(f"GRANT `{role}` TO `{user}`")
     username = f"{setting('databaseAccount')}:{user}:{role}"
     try:
