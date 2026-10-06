@@ -1,0 +1,80 @@
+name: AML benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: Public retrieval benchmark
+        type: choice
+        options: [locomo, longmemeval]
+        default: locomo
+      histories:
+        description: Number of complete histories (1-10; not question count)
+        type: number
+        default: 1
+      top_k:
+        description: Maximum retrieved evidence records (1-100)
+        type: number
+        default: 100
+      runtime_label:
+        description: Deployed Memoria commit or image digest (nonsecret; operator supplied)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+# Share the deployment lock to prevent service updates during this benchmark.
+concurrency:
+  group: aml-aliyun-unit-new-dev
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 160
+    defaults:
+      run:
+        working-directory: agent_memory_leaderboard
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Prepare and verify the pinned dataset
+        id: prepare
+        timeout-minutes: 15
+        env:
+          AML_BENCHMARK_DATASET: ${{ inputs.dataset }}
+          AML_BENCHMARK_HISTORIES: ${{ inputs.histories }}
+          AML_BENCHMARK_TOP_K: ${{ inputs.top_k }}
+          AML_BENCHMARK_RUNTIME_LABEL: ${{ inputs.runtime_label }}
+        run: python3 scripts/benchmark_ci.py prepare
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          python-version: '3.12'
+          enable-cache: true
+          cache-dependency-glob: agent_memory_leaderboard/uv.lock
+      - name: Install locked benchmark dependencies
+        timeout-minutes: 5
+        run: uv sync --locked
+      - name: Run Add/Search retrieval benchmark
+        id: execute
+        timeout-minutes: 120
+        env:
+          ADAPTER_API_KEY: ${{ secrets.AML_ADAPTER_API_KEY }}
+        run: uv run --no-sync python scripts/benchmark_ci.py execute
+      - name: Publish results to the run summary
+        if: always()
+        env:
+          AML_PREPARE_OUTCOME: ${{ steps.prepare.outcome }}
+          AML_EXECUTE_OUTCOME: ${{ steps.execute.outcome }}
+        run: python3 scripts/benchmark_ci.py summary
+      - name: Save reports and checkpoints
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: aml-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
+          path: agent_memory_leaderboard/var/ci-benchmark/results/
+          if-no-files-found: warn
+          retention-days: 30

@@ -2,10 +2,10 @@ name: AML offline CI
 
 on:
   pull_request:
-    paths: ['agent_memory_leaderboard/**', 'deploy/**', '.github/workflows/aml-ci.yml', '.github/workflows/aml-dev-deploy.yml']
+    paths: ['agent_memory_leaderboard/**', 'deploy/**', '.github/workflows/aml-ci.yml', '.github/workflows/aml-dev-deploy.yml', '.github/workflows/aml-benchmark.yml']
   push:
     branches: [main]
-    paths: ['agent_memory_leaderboard/**', 'deploy/**', '.github/workflows/aml-ci.yml', '.github/workflows/aml-dev-deploy.yml']
+    paths: ['agent_memory_leaderboard/**', 'deploy/**', '.github/workflows/aml-ci.yml', '.github/workflows/aml-dev-deploy.yml', '.github/workflows/aml-benchmark.yml']
   workflow_dispatch:
 
 permissions:
@@ -29,7 +29,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: agent_memory_leaderboard/uv.lock
       - run: uv sync --locked
-      - run: uv run ruff check src tests benchmarks ../deploy/scripts ../deploy/tests
+      - run: uv run ruff check src tests benchmarks scripts/benchmark_ci.py ../deploy/scripts ../deploy/tests
       - run: uv run pytest -q
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
         with:
