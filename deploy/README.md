@@ -6,13 +6,15 @@ CI/CD、Helm chart 和 Pulumi 程序全部在 `memory_benchmarks` 维护。
 ## 实施状态与 Review
 
 部署配置已编写，**Memoria 和适配器尚未实际部署**。专用数据库用户／角色／库和
-GitHub 运行凭据已准备；本地 Ruff、Go 编译及两组 Helm 渲染通过。本地 pytest、
-镜像构建、Pulumi preview／up、真实 Add/Search 及公网验收尚未执行；Actions 结果以
-PR checks 为准。
-本地渲染使用 Helm 4.1.4，CI/CD 固定 Helm 3.17.4，后者仍待 CI 验证。
+GitHub 运行凭据已准备，公网域名已配置并核实。
+[离线 CI run 37449805528](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37449805528)
+对应 PR 分支版本 `3ad3acc`，Ruff、pytest（152 passed、1 warning）、Helm 3.17.4 两组
+lint／template、适配器／Memoria 源码镜像构建及 Go 编译均通过，不推送镜像或部署。
+本地 Ruff、Go 编译及 Helm 4.1.4 两组渲染也通过，本地未运行 pytest 或容器构建。
+CD、Pulumi preview／up、真实 Add/Search 及公网验收尚未执行；后续提交检查以 PR checks 为准。
 Memoria 默认从 `matrixorigin/memoria` 的 `main` 分支构建，
 也支持选择其他分支、tag、commit 或已发布镜像；实际部署始终使用镜像 digest。
-本轮未执行源码构建，也未修改 Memoria 源码。
+CI 源码构建已通过，未修改 Memoria 源码；镜像发布和实际运行仍待验收。
 
 完整方案、交付状态、源码导航和 Review 重点见
 [CI/CD 交付概要与 Review 入口](../agent_memory_leaderboard/docs/competition-plan.md#cicd-交付概要与-review-入口)。
@@ -155,7 +157,7 @@ AML 评测，因此 AML 平台的评测授权 key 也不属于此 CI/CD 配置�
 | `AML_DEV_CD_ENABLED` | 可选，`true` 才启用 main push 自动部署；默认仅手动发布 |
 | `AML_FREEZE` | 可选，`true` 阻止自动和手动部署；空或 `false` 允许，其他值拒绝继续；preview 仍可执行 |
 | `AML_ADAPTER_WORKERS` | 可选，正整数，默认 `1`；传给 Helm `workers` 与 Uvicorn，不增加 Pod 副本数 |
-| `AML_PUBLIC_HOST` | 已设置为 `aml.cn-dev.matrixone.tech`；启用 HTTPS Ingress，仍须配置 DNS 并执行部署 |
+| `AML_PUBLIC_HOST` | 已设置为 `aml.cn-dev.matrixone.tech`，DNS 已解析到 NGINX 公网 IP；仍须部署并验收 HTTPS |
 | `AML_TLS_SECRET` | 可选，cert-manager 生成的 TLS Secret 名，默认 `aml-tls` |
 | `AML_CERT_ISSUER` | 可选，默认复用 Ready 的 `aliyun-prod-letsencrypt` ClusterIssuer |
 
@@ -250,7 +252,7 @@ rtk proxy docker build --platform linux/amd64 \
   -f ../memory_benchmarks/deploy/docker/memoria.Dockerfile -t memoria:aml-local .
 ```
 
-本轮未执行此命令。PR CI 从来源 ref 构建 Memoria，但不推送；CD 的源码模式负责
+本地未执行此命令；PR CI 从来源 ref 构建 Memoria 已通过，但不推送。CD 的源码模式负责
 checkout、构建、推送及 digest 传递。`image` 模式跳过 Memoria checkout 和构建。
 
 CD 将 ref、实际完整 commit、构建 tag／UTC 日期、镜像 digest、构建 Dockerfile hash 和 benchmark commit
@@ -273,7 +275,7 @@ Pulumi output 和 Memoria Pod annotation 同时记录来源 repo／ref／commit�
 3. 选择 `deploy` 执行发布。程序等待 Helm 和 Pod 就绪，单个 dev 发布串行执行。
    任务入口和 `up` 前检查冻结，Pulumi 对真实更新也检查 `AML_FREEZE`。
    自动部署默认关闭，Actions 不调用真实 Add/Search 或启动基准／官方评测。
-4. 配置公网域名的 DNS 并启用 `AML_PUBLIC_HOST`。chart 创建应用自己的 `Certificate`，
+4. 核对公网域名的 DNS 和 `AML_PUBLIC_HOST`（当前均已配置）。chart 创建应用自己的 `Certificate`，
    现有 cert-manager 使用阿里云 DNS-01 自动签发、保存及续期 TLS Secret；发布等待
    Certificate Ready。DNS A 记录应指向 unit 集群
    NGINX 公网地址；2026-10-06 只读核实的地址是 `47.97.230.53`，以发布时实际值为准。
@@ -290,13 +292,14 @@ NGINX 路由设置 1800 秒读／发送超时和关闭上游自动重试，以�
 Issuer 均为 Ready；此 CD 不安装或升级共享控制器。该旧版本的维护属于集群基础设施职责。
 
 当前生产 Issuer 的 DNS webhook 配置范围为 `cn-dev.matrixone.tech`；已选定并配置
-`aml.cn-dev.matrixone.tech`。公共 DNS 当前无该记录，本机阿里云账号对该区域返回
-`IncorrectDomainUser`，A 记录仍待域名管理员添加。域名不属于该范围时，
+`aml.cn-dev.matrixone.tech`。2026-10-06 公共解析器 `223.5.5.5` 的 TCP 查询确认
+A 记录为 `47.97.230.53`、TTL 600 秒，与只读核查的 NGINX LoadBalancer IP 一致。
+当前尚无应用 Ingress，证书尚未申请。域名不属于该范围时，
 需要基础设施维护者提供对应 Issuer，不能仅修改应用域名后假定签发成功。
 [cert-manager DNS-01](https://cert-manager.io/docs/configuration/acme/dns01/)
 
 DNS 解析区域为 `cn-dev.matrixone.tech`（已委派给 `ns1.alidns.com`／`ns2.alidns.com`），
-请使用拥有该区域权限的阿里云账号添加以下记录：
+域名管理员已配置以下记录；后续修改须使用拥有该区域权限的账号：
 
 | 字段 | 值 |
 |---|---|
