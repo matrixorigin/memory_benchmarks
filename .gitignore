@@ -151,6 +151,14 @@ activemq-data/
 
 # Environments
 .env
+.env.*
+!.env.example
+deploy/.runtime.env
+.aml-runtime-*
+deploy/pulumi/Pulumi.new-dev.yaml
+.deploy-venv/
+.memoria-source/
+deploy/memoria-build.json
 .envrc
 .venv
 env/

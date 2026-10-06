@@ -1,0 +1,44 @@
+image:
+  repository: ''
+  digest: ''
+imagePullSecret: aml-registry
+authSecret: aml-runtime
+stateClaim: aml-adapter-state
+secretChecksum: ''
+memoria:
+  sourceRepository: ''
+  sourceRef: ''
+  sourceCommit: ''
+  image:
+    repository: ''
+    digest: ''
+  url: http://aml-memoria:8100
+  secretName: aml-runtime
+  secretKey: MASTER_KEY
+  embeddingModel: BAAI/bge-m3
+  embeddingDim: '1024'
+  embeddingBaseURL: ''
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: '1'
+      memory: 2Gi
+ingress:
+  enabled: false
+  className: nginx
+  host: ''
+  tlsSecret: aml-tls
+certificate:
+  issuer: aliyun-prod-letsencrypt
+namespacePrefix: aml-dev-v1
+timeoutSeconds: 120
+workers: 1
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    cpu: '1'
+    memory: 1Gi

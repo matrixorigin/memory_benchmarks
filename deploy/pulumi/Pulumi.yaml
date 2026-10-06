@@ -1,0 +1,3 @@
+name: memory-benchmarks
+description: Dedicated Memoria and AML adapter in the Aliyun dev unit cluster
+runtime: go

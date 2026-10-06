@@ -1,0 +1,19 @@
+config:
+  memory-benchmarks:expectedApiServer: '__AML_EXPECTED_API_SERVER__'
+  memory-benchmarks:expectedClusterUID: '__AML_EXPECTED_CLUSTER_UID__'
+  memory-benchmarks:namespace: aml-memory-benchmarks
+  memory-benchmarks:storageClass: alicloud-disk-essd-pl0
+  memory-benchmarks:accessMode: ReadWriteOnce
+  memory-benchmarks:storageSize: 20Gi
+  memory-benchmarks:databaseHost: proxy.freetier-01.svc.cluster.local
+  memory-benchmarks:databasePort: '6001'
+  memory-benchmarks:databaseAccount: '__AML_DATABASE_ACCOUNT__'
+  memory-benchmarks:databaseUser: aml_memoria
+  memory-benchmarks:databaseRole: aml_memoria_role
+  memory-benchmarks:databaseName: aml_memoria
+  memory-benchmarks:ownerPrefix: aml-dev-v1
+  memory-benchmarks:embeddingModel: BAAI/bge-m3
+  memory-benchmarks:embeddingDim: '1024'
+  memory-benchmarks:embeddingBaseURL: https://bgem3.model.shanghai.idc.matrixorigin.cn:30443/v1
+  memory-benchmarks:ingressClass: nginx
+  memory-benchmarks:certificateIssuer: aliyun-prod-letsencrypt
