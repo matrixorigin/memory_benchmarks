@@ -65,6 +65,12 @@ independent Pulumi stack, recording the actual source commit for each source bui
 Public access requires DNS; the existing cert-manager ClusterIssuer automatically
 issues and renews the TLS Secret.
 
+The Aliyun dev endpoint is deployed at `https://aml.cn-dev.matrixone.tech`.
+See the [deployment steps and Actions inputs](../deploy/README.md#发布流程) and
+[public curl/Python integration examples](../deploy/README.md#接入已部署的-addsearch).
+Public clients need only the adapter API key; they do not need Memoria master,
+database, or Kubernetes credentials.
+
 ## Contract verification
 
 Checked against the [English integration contract](https://agentmemories.ai/docs#doc-en-contract)
@@ -76,8 +82,9 @@ For submission, use public endpoint URLs without embedded credentials; the
 localhost examples below are for development. Enable authentication for Full.
 Configure proxy/load-balancer request timeouts for the documented 30-minute
 request window. `MEMORIA_TIMEOUT_SECONDS` controls each upstream call (default
-120 seconds), not the total Add duration. Live Memoria retrieval and the platform
-Smoke test still need deployment verification.
+120 seconds), not the total Add duration. The deployed dev endpoint has passed
+the project's live integration smoke; official platform Smoke and long-request
+validation remain pending. See the [current acceptance status](docs/competition-plan.md#当前交付状态).
 
 ```sh
 curl http://localhost:8000/add \

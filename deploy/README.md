@@ -5,22 +5,27 @@ CI/CD、Helm chart 和 Pulumi 程序全部在 `memory_benchmarks` 维护。
 
 ## 实施状态与 Review
 
-部署配置已编写，**Memoria 和适配器尚未实际部署**。专用数据库用户／角色／库和
-GitHub 运行凭据已准备，公网域名已配置并核实。
-[离线 CI run 37452656686](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37452656686)
-对应 PR 分支版本 `c54dc53`，Ruff、pytest（154 passed、1 warning）、Helm 3.17.4 两组
-lint／template、适配器／Memoria 源码镜像构建及 Go 编译均通过，不推送镜像或部署。
-当前多库配置修复的本地完整 pytest 为 154 passed、1 warning，Ruff 通过；此前本地 Go 编译
-及 Helm 4.1.4 两组渲染也通过。本地未运行容器构建。
-CD、Pulumi preview／up、真实 Add/Search 及公网验收尚未执行；后续提交检查以 PR checks 为准。
+**Memoria 和适配器已在阿里云 dev 部署，公网最小联调通过。**
+[部署 run 37459492335](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37459492335)
+使用本仓库 commit `3048f6bab82966ee63c25fbf5f6cb51cadf87c6d`，2026-10-06 完成
+离线检查、两个镜像构建与 ACR 推送、Pulumi up 和证书等待，全流程约 14 分 48 秒。
+两个 Deployment 均为 1/1 Ready、无重启，20Gi journal PVC 已绑定。
+公网入口为 `https://aml.cn-dev.matrixone.tech`；证书 Ready，正常 TLS 校验下
+`/health`、`/ready` 返回 200，未带 key 的 `/search` 返回 401。
+
+现有 `src.smoke` 通过公网适配器和临时本地 Memoria Service 转发验证了 owner 认证、
+同步 Add 后立即 Search、跨会话检索、用户隔离、幂等重试、top_k 和空用户，共 7 项，
+耗时 16.32 秒。测试仅使用随机 UUID 用户，测试记忆已逻辑停用，转发已关闭；
+未物理删除用户库、journal 或历史快照。此为项目集成测试，不是 AML 官方 Smoke 或质量评分。
 Memoria 默认从 `matrixorigin/memoria` 的 `main` 分支构建，
 也支持选择其他分支、tag、commit 或已发布镜像；实际部署始终使用镜像 digest。
-CI 源码构建已通过，未修改 Memoria 源码；镜像发布和实际运行仍待验收。
+本次实际来源为 `e180dff308447efb487f313187968e77323dd33f`，未修改 Memoria 源码。
+具体 digest 和剩余验收范围见方案文档的[当前交付状态](../agent_memory_leaderboard/docs/competition-plan.md#当前交付状态)。
 
 Memoria 显式采用多库模式：`DATABASE_URL` 与 `MEMORIA_SHARED_DATABASE_URL` 指向同一
 专用共享库 `aml_memoria`，`MEMORIA_MULTI_DB=1`。初始化脚本为专用角色授予共享库权限及
 `CREATE DATABASE ON ACCOUNT *`；用户库由 Memoria 按需创建并由该角色拥有。
-首次真实用户 Add/Search、完整 schema 和模型调用仍须在部署后验收。
+当前版本的共享 schema、按需用户库及带上海 embedding 配置的真实 Add/Search 已通过最小联调。
 控制项与权限边界见[数据库模式与部署兼容性](../agent_memory_leaderboard/docs/competition-plan.md#数据库模式与部署兼容性)。
 
 完整方案、交付状态、源码导航和 Review 重点见
@@ -45,7 +50,7 @@ namespace 与 journal PVC 受 Pulumi `protect` 保护；删除环境时需要显
 数据库用户、角色和库在一次性初始化步骤中创建，不由 Helm 卸载或 Pulumi destroy 删除。
 
 同名 `new-dev` 存在于多个 gitops Pulumi project 中。控制面
-`cloud-service/new-dev` 的 `moi-main/moi-memoria` 属于另一集群，本项目计划部署自己的
+`cloud-service/new-dev` 的 `moi-main/moi-memoria` 属于另一集群，本项目部署自己的
 `aml-memoria`。应用发布入口只操作本项目独立 stack。
 
 ### 私有环境配置
@@ -91,7 +96,7 @@ MatrixOne account。重复运行上述初始化命令可补齐授权，原有密
 
 2026-10-06 已用现有凭据重跑初始化并验证：共享库重复创建、新建自有库／表、CRUD、
 ALTER、索引与自有库删除成功；另一个管理员角色拥有的临时库的读取、更新、删除均被拒绝。
-验证仅使用合成数据，临时库已清理。完整 Memoria schema 和首次 Add/Search 仍待部署验收。
+权限验证仅使用合成数据，临时库已清理。部署后的最小联调也已验证 Memoria schema 初始化及首次 Add/Search。
 
 ### 测试用户与认证
 
@@ -119,18 +124,18 @@ AML auth key 验证调用方，`user_id` 决定数据归属，二者不能互相
 | 名称 | 来源及用途 | 配置范围／当前状态 |
 |---|---|---|
 | `KUBECONFIG` | 必填，来自 `~/dev/unit-kubeconfig` 的完整原始 YAML；用于部署到指定阿里云 unit 集群。不填写文件路径，不做 base64 编码 | Repository Secret，已上传 |
-| `PULUMI_TOKEN` | 必填，Pulumi Cloud access token；需有 `MatrixOneCloud/memory-benchmarks/new-dev` 创建／读写权限。workflow 映射为 `PULUMI_ACCESS_TOKEN` | Repository Secret，已存在，实际权限待发布验证 |
+| `PULUMI_TOKEN` | 必填，Pulumi Cloud access token；需有 `MatrixOneCloud/memory-benchmarks/new-dev` 创建／读写权限。workflow 映射为 `PULUMI_ACCESS_TOKEN` | Repository Secret，已通过本次 Pulumi up |
 | `NEW_ACR_USERNAME` | 必填，Hangzhou ACR 登录用户名，用于推送和 Pod 拉取镜像 | Organization Secret，本仓库已有访问授权 |
-| `NEW_ACR_PASSWORD` | 必填，与上述用户名匹配的 ACR 登录密码；需能推送／拉取适配器及 Memoria 仓库 | Organization Secret，本仓库已有访问授权，实际权限待发布验证 |
+| `NEW_ACR_PASSWORD` | 必填，与上述用户名匹配的 ACR 登录密码；需能推送／拉取适配器及 Memoria 仓库 | Organization Secret，已通过镜像推送与 Pod 拉取 |
 | `AML_DATABASE_PASSWORD` | 必填，专用 `aml_memoria` SQL 用户密码，来自生成的 `deploy/.runtime.env`；供 Memoria 连接数据库 | Repository Secret，已上传 |
 | `AML_MEMORIA_MASTER_KEY` | 必填，生成于 `deploy/.runtime.env`，至少 32 字符；Memoria 与适配器上游调用共用，独立于对外 key | Repository Secret，已上传 |
 | `AML_ADAPTER_API_KEY` | 必填，生成于 `deploy/.runtime.env`，至少 32 字符且与 master key 不同；AML 调用 Add/Search 时使用 | Repository Secret，已上传；正式参评时向 AML 平台提供此 key |
-| `AML_EMBEDDING_API_KEY` | 当前上海 embedding 服务必填，由该模型服务提供有效 key；Memoria 使用 `Authorization: Bearer <key>` 调用 | 必需 Repository Secret，已配置；无 key 请求已返回 401，有效 key 调用尚未验收 |
+| `AML_EMBEDDING_API_KEY` | 当前上海 embedding 服务必填，由该模型服务提供有效 key；Memoria 使用 `Authorization: Bearer <key>` 调用 | 必需 Repository Secret，已配置；无 key 返回 401，带配置 key 的真实 Add/Search 联调通过 |
 
 2026-10-06 只读核对 GitHub 名称元数据：六个必需 Repository Secrets 均已存在，
 两个必需 Organization Secrets 对本仓库可用，当前没有缺失的必需 Secret 名称。
-此核对没有读取 Secret 值，也不证明
-凭据有效、未过期或具备实际发布权限。
+Secret 名称核对本身不证明凭据有效；本次实际部署另行验证了集群、Pulumi、ACR、
+数据库及应用认证链路。后续轮换或权限变更仍须重新验收。
 
 配置入口是本仓库 `Settings → Secrets and variables → Actions → Secrets`。
 新增 Repository Secret 时填写表中名称和值；通常只填写值，不填写 `KEY=` 或外围
@@ -186,7 +191,7 @@ AML 评测，因此 AML 平台的评测授权 key 也不属于此 CI/CD 配置�
 | `AML_DEV_CD_ENABLED` | 可选，`true` 才启用 main push 自动部署；默认仅手动发布 |
 | `AML_FREEZE` | 可选，`true` 阻止自动和手动部署；空或 `false` 允许，其他值拒绝继续；preview 仍可执行 |
 | `AML_ADAPTER_WORKERS` | 可选，正整数，默认 `1`；传给 Helm `workers` 与 Uvicorn，不增加 Pod 副本数 |
-| `AML_PUBLIC_HOST` | 已设置为 `aml.cn-dev.matrixone.tech`，DNS 已解析到 NGINX 公网 IP；仍须部署并验收 HTTPS |
+| `AML_PUBLIC_HOST` | 已设置为 `aml.cn-dev.matrixone.tech`，DNS、Ingress、证书及 HTTPS 最小联调已通过 |
 | `AML_TLS_SECRET` | 可选，cert-manager 生成的 TLS Secret 名，默认 `aml-tls` |
 | `AML_CERT_ISSUER` | 可选，默认复用 Ready 的 `aliyun-prod-letsencrypt` ClusterIssuer |
 
@@ -217,11 +222,12 @@ Memoria 变量省略时也默认使用适配器仓库。构建脚本允许共享
 可选的既有现成镜像仍引用 `moc-pub/memoria` 下真实已发布的 digest；源码模式向
 `moc-pub/plugin` 推送，不依赖该既有引用。此处 ACR namespace 与 Kubernetes namespace
 `aml-memory-benchmarks` 独立。tag 用于查找，实际发布始终使用构建返回的 digest。
-新构建镜像尚未推送，仓库存在性与推送／拉取权限仍待验收。
+两个源码镜像已成功推送到该仓库，并由 dev Pod 成功拉取。
 
 Memoria embedding 默认配置来自 gitops dev：`BAAI/bge-m3`、1024 维、上海服务
-`https://bgem3.model.shanghai.idc.matrixorigin.cn:30443/v1`。它的可达性、鉴权和真实质量
-仍需验收。本适配器只调用普通存储／检索接口，此发布配置不要求 LLM 或 rerank 模型。
+`https://bgem3.model.shanghai.idc.matrixorigin.cn:30443/v1`。当前 key 与配置下的 dev Memoria
+写入／检索联调已通过；模型质量仍需基准评测。本适配器只调用普通存储／检索接口，
+此发布配置不要求 LLM 或 rerank 模型。
 不混用不同 embedding 模型的既有向量；固定模型后再建立质量基线。
 
 2026-10-06 从本机使用正常 HTTPS 证书校验，向上述服务的 `/embeddings` 发送一条
@@ -229,8 +235,8 @@ Memoria embedding 默认配置来自 gitops dev：`BAAI/bge-m3`、1024 维、上
 0.071 秒内返回 HTTP `401`，内容为 `{"error":"Unauthorized"}`。
 **当前公网接口不接受匿名调用，部署必须提供 `AML_EMBEDDING_API_KEY`。**
 workflow 配置检查与 Pulumi 程序均将该 key 列为必填，缺失时在创建应用资源前失败。
-这一探针只验证了本机无 key 请求的鉴权行为；尚未验证有效 key、向量维度或 dev Pod
-到模型服务的调用。配置后需进行一次带 key 的最小请求验收。
+匿名探针仅验证鉴权行为；部署后的真实 Add/Search 已使用配置的 key 和模型完成。
+该最小测试没有独立检查模型原始向量长度，也不提供检索质量评分。
 
 当前保留的 `image` 模式镜像来自 gitops dev 已保存版本
 `apiserver-20260817-a8c0397-dbfc6241`，已读取 registry manifest 并固定为
@@ -262,7 +268,7 @@ Memoria 仓库有新提交不会自动触发本仓库的发布，需要手动触
 镜像推送至 `registry.cn-hangzhou.aliyuncs.com/moc-pub/plugin`，以
 `aml-memoria-<UTC 构建日期>-<实际 SHA 前 7 位>` 标记，再按构建返回的 digest 部署。
 适配器使用同仓库和不同项目前缀；需要确保仓库存在且 ACR 凭据具备推送／拉取权限。
-本轮未验证这些权限。
+本次 CD 已验证两个镜像的推送与 Pod 拉取权限。
 
 构建使用本项目的 [Memoria Dockerfile](docker/memoria.Dockerfile)，上下文是检出的
 Memoria 仓库根目录，使用 `cargo build --locked --release --bin memoria`。
@@ -295,6 +301,25 @@ Pulumi output 和 Memoria Pod annotation 同时记录来源 repo／ref／commit�
 [方案中的镜像选择与源码构建](../agent_memory_leaderboard/docs/competition-plan.md#memoria-镜像选择与源码构建)。
 
 ## 发布流程
+
+### Actions 参数填写
+
+在本仓库 **Actions → AML Aliyun dev deployment → Run workflow** 操作。
+目前已有完整 dev 部署，后续使用同一 stack 更新已有服务；不用重新创建数据库或测试用户。
+
+| 场景 | workflow 分支 | operation | deployment_target | memoria_build_mode | memoria_ref |
+|---|---|---|---|---|---|
+| 首次部署／更新两个服务 | `main` | `deploy` | `both` | `source` | `main` 或指定 Memoria ref |
+| 只更新 Memoria | `main` | `deploy` | `memoria` | `source` | 指定 Memoria 分支、tag 或 SHA |
+| 只更新适配器 | `main` | `deploy` | `memory_benchmarks` | `configured`（此场景忽略） | 留空（此场景忽略） |
+| 预览上述变更 | `main` | `preview` | 对应范围 | 与实际发布一致 | 与实际发布一致 |
+
+workflow 的分支决定 `memory_benchmarks` 代码；`memoria_build_mode` 和 `memoria_ref`
+只控制 **Memoria**。`source` 从源码构建；`configured` 读取已配置模式（默认源码）；
+`image` 使用 `AML_MEMORIA_IMAGE` 的固定 digest 镜像。ref 留空时使用已配置来源，默认 `main`。
+输入 `deploy` 才实际更新应用；需要先检查变更时按下面的 preview／deploy 两步执行。
+
+### 执行步骤
 
 1. 将变更合入 `main`，填写上述 Secrets／Variables。
 2. Actions 中选择 **AML Aliyun dev deployment**，点击 **Run workflow**。
@@ -364,7 +389,7 @@ Issuer 均为 Ready；此 CD 不安装或升级共享控制器。该旧版本的
 当前生产 Issuer 的 DNS webhook 配置范围为 `cn-dev.matrixone.tech`；已选定并配置
 `aml.cn-dev.matrixone.tech`。2026-10-06 公共解析器 `223.5.5.5` 的 TCP 查询确认
 A 记录为 `47.97.230.53`、TTL 600 秒，与只读核查的 NGINX LoadBalancer IP 一致。
-当前尚无应用 Ingress，证书尚未申请。域名不属于该范围时，
+应用 Ingress 已创建，`aml-tls` 证书已由该 Issuer 签发并 Ready。域名不属于该范围时，
 需要基础设施维护者提供对应 Issuer，不能仅修改应用域名后假定签发成功。
 [cert-manager DNS-01](https://cert-manager.io/docs/configuration/acme/dns01/)
 
@@ -399,6 +424,145 @@ kubectl --kubeconfig "$HOME/dev/unit-kubeconfig" -n aml-memory-benchmarks \
 可读及 Memoria `/health`，每个 worker 最多一个检查，并发探针直接返回 503，不排队。
 ready 不验证运行 master key、数据库授权、embedding 或 Add/Search 质量。
 
+## 接入已部署的 Add/Search
+
+客户端只需要公网地址和 **`AML_ADAPTER_API_KEY`**，无需 kubeconfig、数据库密码或
+`MEMORIA_MASTER_KEY`，也无需预注册 Memoria 用户。运维从受控的 `deploy/.runtime.env`
+取得适配器 key 并提供给调用方；GitHub Secret 页面不能回读已保存的值。
+AML 平台配置 Add URL、Search URL 和该 key；你在本地联调也使用同样的接口。
+
+| 配置 | 值 |
+|---|---|
+| Add URL | `https://aml.cn-dev.matrixone.tech/add` |
+| Search URL | `https://aml.cn-dev.matrixone.tech/search` |
+| 认证 Header | `Authorization: Bearer <AML_ADAPTER_API_KEY>` |
+| Content-Type | `application/json` |
+| 交互式接口说明 | `https://aml.cn-dev.matrixone.tech/docs` |
+
+### curl：写入后检索
+
+先设置环境变量。示例 key 是占位符，不是实际凭据；运行时替换为自己的 key。
+每次独立演示生成新用户，避免与其他测试数据混在一起。
+
+```sh
+export AML_BASE_URL='https://aml.cn-dev.matrixone.tech'
+export AML_ADAPTER_API_KEY='<实际适配器 key>'
+export AML_DEMO_USER="aml-demo-$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+
+curl --fail-with-body -sS "$AML_BASE_URL/health"
+curl --fail-with-body -sS "$AML_BASE_URL/ready"
+
+curl --fail-with-body -sS --max-time 120 "$AML_BASE_URL/add" \
+  -H "Authorization: Bearer $AML_ADAPTER_API_KEY" \
+  -H 'Content-Type: application/json' \
+  --data-binary @- <<JSON
+{
+  "request_id": "eval:demo:conv-0:chunk-0",
+  "user_id": "$AML_DEMO_USER",
+  "session_id": "session-1",
+  "messages": [
+    {"role": "user", "content": "Orion project uses Rust for the server.", "timestamp": 1704067200000}
+  ]
+}
+JSON
+
+curl --fail-with-body -sS --max-time 120 "$AML_BASE_URL/search" \
+  -H "Authorization: Bearer $AML_ADAPTER_API_KEY" \
+  -H 'Content-Type: application/json' \
+  --data-binary @- <<JSON
+{"user_id": "$AML_DEMO_USER", "query": "What language does the Orion server use?", "top_k": 10}
+JSON
+```
+
+Add 成功返回 HTTP 200 和以下结构，三个 ID 与请求完全一致：
+
+```json
+{
+  "success": true,
+  "request_id": "eval:demo:conv-0:chunk-0",
+  "user_id": "<本次 AML_DEMO_USER>",
+  "session_id": "session-1"
+}
+```
+
+Search 返回记忆证据，不生成最终答案。以下为结构示意；ID、内容格式、分数和时间取决于
+实际后端结果，`score` 和 `created_at` 为可选字段，无匹配时返回 `{"data": []}`。
+
+```json
+{"data": [{"id": "<memory id>", "content": "<包含 Orion server uses Rust 的记忆证据>"}]}
+```
+
+### Python：只用标准库
+
+先设置上述 `AML_BASE_URL` 和 `AML_ADAPTER_API_KEY`，将下面保存为 `aml_demo.py`，
+运行 `python3 aml_demo.py`。它发送一条 Add 和一条 Search，不启动本地服务或评测。
+
+```python
+import json
+import os
+import time
+import uuid
+from urllib.request import Request, urlopen
+
+base = os.getenv("AML_BASE_URL", "https://aml.cn-dev.matrixone.tech").rstrip("/")
+api_key = os.environ["AML_ADAPTER_API_KEY"]
+run_id = uuid.uuid4().hex
+user_id = f"aml-demo:{run_id}:alice"
+
+
+def post(path, payload):
+    request = Request(
+        base + path,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urlopen(request, timeout=120) as response:
+        return json.load(response)
+
+
+add_payload = {
+    "request_id": f"eval:{run_id}:conv-0:chunk-0",
+    "user_id": user_id,
+    "session_id": "session-1",
+    "messages": [{
+        "role": "user",
+        "content": "Orion project uses Rust for the server.",
+        "timestamp": int(time.time() * 1000),
+    }],
+}
+print("Add:", json.dumps(post("/add", add_payload), ensure_ascii=False))
+print("Search:", json.dumps(post("/search", {
+    "user_id": user_id,
+    "query": "What language does the Orion server use?",
+    "top_k": 10,
+}), ensure_ascii=False))
+```
+
+### 请求字段与使用规则
+
+| 字段 | 要求／用途 |
+|---|---|
+| Add `request_id` | 必填非空字符串，整体视为不透明 ID；相同用户的不同写入使用不同 ID，原样重试保留 ID 和完整 payload |
+| `user_id` | Add/Search 均必填非空字符串，决定记忆归属；同一用户跨会话检索仍用相同值 |
+| Add `session_id` | 必填非空字符串，用于来源会话；Search 不需要它，不按会话限制检索 |
+| Add `messages` | 必填非空数组，每条包含 `role` 和 `content` |
+| message `role` | `user` 或 `assistant` |
+| message `content`、Search `query` | 非空文本，或非空的 `[{"type":"text","text":"..."}]` 数组；当前不接受图片 |
+| message `timestamp` | 可选，整数 Unix 毫秒，例如 `1704067200000`；不是秒或 ISO 字符串 |
+| Search `top_k` | 必填正整数，返回数量不超过此值；当前后端最多检索 100 条 |
+| Search `options` | 可选字符串数组；当前接受该字段，但不用于生成答案 |
+
+未知请求字段会被拒绝。相同 `user_id`／`request_id` 原样重试不会重复写入；
+同一 ID 改 payload 返回 400。最小示例没有自动重试或清理：新增写入会留在该随机用户下。
+需要完整的验证和测试记忆逻辑停用时，使用已有 `src.smoke` 并配置内部 Memoria 访问；
+它需要额外 master key，普通 Add/Search 客户端不需要。
+错误码和重试规则见[适配器说明](../agent_memory_leaderboard/README.md#retries-and-deployment-state)。
+示例客户端的 120 秒超时仅供小请求联调，不代表正式 AML 整批 Add 的总超时要求。
+
 ## 发布冻结与上线验收
 
 进入正式评测前设置 `AML_FREEZE=true`，关闭自动部署，取消排队的 deploy，等待已运行
@@ -411,10 +575,10 @@ CI/CD 已固定 Actions commit SHA，部署依赖安装强制校验 PyPI 发布 
 健康探针的八个用例覆盖健康、上游非 2xx／连接失败／超时、journal 不可用，
 以及 40 个 Search 占满业务线程池时探针仍可用、并发 ready 不排队。
 
-首次部署仍须验收：
+正式参评前仍须验收：
 
-- 在当前非 root／只读文件系统配置下确认 Memoria 启动、迁移、Add/Search 和重启，
-  检查 Pod 日志是否出现 `Read-only file system`／`Permission denied`。只有证据明确需要
+- 当前源码 digest 在 UID 1000／只读根文件系统下启动、schema 初始化和 Add/Search 已通过。
+  重启恢复仍未验证；后续来源版本也须核对日志中的 `Read-only file system`／`Permission denied`。只有证据明确需要
   额外可写目录时才增加最小挂载；不预先取消只读限制。
 - 核对公网负载均衡实例的产品、listener 和真实超时。验证无中间响应的 5 分钟请求，
   继续验证超过 900 秒以及接近组别契约上限的请求，并验证超时后的恢复。记录准确耗时、
