@@ -49,7 +49,7 @@ Review 使用源码、部署模板、非秘密配置及已记录的执行证据�
 
 ### Review 重点
 
-1. **工作流能否执行**：Actions 表达式、依赖／版本、Go 编译、镜像构建、digest 传递和 Pulumi 参数是否一致。离线 CI 已通过，CD 的镜像发布、digest 传递及 Pulumi 执行仍待验收。
+1. **工作流能否执行**：Actions 表达式、依赖／版本、Go 编译、镜像构建、digest 传递和 Pulumi 参数是否一致。离线 CI 及首次完整 CD 的镜像发布、digest 传递和 Pulumi 执行已通过，实际版本见当前交付状态。
 2. **发布范围是否正确**：只操作指定 unit 集群及独立 stack；集群身份检查、应用 namespace、共享资源引用和删除保护是否完整。
 3. **Memoria 能否启动并供适配器调用**：固定镜像是否具备普通 `/v1/memories` 路径所需的 owner、metadata 和 query 能力；运行参数、schema 初始化、数据库角色权限和 embedding 环境是否满足该版本。
 4. **状态与恢复是否可靠**：SQLite 单写者、PVC 绑定／权限、Recreate、发布中断、凭据更新及已有 journal 的保留；确认 `protect` 不等价于备份或恢复方案。
@@ -168,7 +168,7 @@ Memoria 内部 Service 为 `aml-memoria:8100`；适配器使用该 Memoria 的 m
 
 2026-10-06 已在指定 dev MatrixOne（报告版本 `v4.2.0`）幂等补齐授权，保留原凭据。使用专用角色验证共享库 `CREATE DATABASE IF NOT EXISTS`、新建临时用户库／表、CRUD、ALTER、索引和自有库删除；读取、更新及删除管理员角色创建的另一个临时库均被拒绝（错误码 `20101`）。仅使用随机命名的测试库和合成数据，结束后已清理，未读取其他业务库。该检查证明本次所测 SQL 操作和权限边界，不代表所有 Memoria 功能均已验证。
 
-完整 Memoria schema、首次用户 Add/Search 和重启恢复仍须通过真实镜像验收。权限检查不替代 HTTP 路径、embedding 或质量评测。本 PR 只调整比赛项目的部署配置和初始化授权，不修改 Memoria 的数据库路由或启动语义。
+当前实际镜像的共享及用户 schema 初始化、首次 Add/Search 已通过真实联调，重启恢复仍须验收。权限检查不替代 HTTP 路径、embedding 或质量评测。本项目只调整比赛部署配置和初始化授权，不修改 Memoria 的数据库路由或启动语义。
 
 embedding 默认沿用 gitops dev 配置：上海 OpenAI-compatible `BAAI/bge-m3`、1024 维。其网络、认证、预算及真实检索质量需要联调确认；当前发布配置不要求 LLM 或 rerank，实际 Add/Search 路径没有调用 Answer/Eval 或 Observe 抽取。镜像均固定 digest，不混用不同 embedding 模型的既有向量。
 
@@ -194,7 +194,7 @@ embedding 默认沿用 gitops dev 配置：上海 OpenAI-compatible `BAAI/bge-m3
 
 启用公网时设置明确域名，并配置 DNS 指向 NGINX 公网地址。chart 声明专用 Certificate，cert-manager 自动申请、保存及续期 TLS Secret；发布等待 Certificate Ready。证书私钥由集群控制器管理，CI/CD 不负责重复签发或更新该 Secret。Let’s Encrypt 当前默认有效期为 90 天，足以覆盖一个月比赛；以真实 `notAfter` 为准并保留自动续期。[cert-manager DNS-01](https://cert-manager.io/docs/configuration/acme/dns01/)，[证书有效期](https://letsencrypt.org/docs/cert-lifetimes/)
 
-公网域名选定为 `aml.cn-dev.matrixone.tech`，GitHub Repository Variable `AML_PUBLIC_HOST` 已设置，A 记录已配置。部署后的公开入口为 `https://aml.cn-dev.matrixone.tech/add` 与 `https://aml.cn-dev.matrixone.tech/search`。当前尚无应用 Ingress，也未请求证书；仍须部署并验收证书链和实际可达性。[Kubernetes Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/)
+公网域名选定为 `aml.cn-dev.matrixone.tech`，GitHub Repository Variable `AML_PUBLIC_HOST` 已设置，A 记录已配置。部署后的公开入口为 `https://aml.cn-dev.matrixone.tech/add` 与 `https://aml.cn-dev.matrixone.tech/search`。应用 Ingress 与证书已创建，正常 TLS 校验下的公网健康检查和 Add/Search 最小联调已通过。[Kubernetes Ingress](https://kubernetes.io/docs/concepts/services-networking/ingress/)
 
 DNS 使用独立的 `cn-dev.matrixone.tech` 阿里云解析区域，已核对其 NS 为 `ns1.alidns.com`／`ns2.alidns.com`。域名管理员已配置 `aml` 主机的 A 记录。2026-10-06 使用公共解析器 `223.5.5.5` 的 TCP 查询返回 `NOERROR`、`47.97.230.53`、TTL 600 秒；同次只读核查的 unit NGINX LoadBalancer IP 也为 `47.97.230.53`。后续入口 IP 变化时维护该区域的记录，不在父域的其他解析系统中创建替代记录。
 
@@ -259,13 +259,13 @@ Memoria 和适配器各单副本，journal 持久保存，使用 Recreate 更新
 
 ### 发布安全与工程补充
 
-以下工程措施已在代码中实现；实际发布和运行验收尚待完成。优先保证发布可控和检查完整，再按实测调整吞吐。
+以下工程措施已在代码中实现；首次完整发布及最小运行联调已通过，恢复与容量等剩余验收见后文。
 
 | 项目 | 当前事实 | 处理要求 |
 |---|---|---|
 | 发布冻结（P1） | `AML_FREEZE=true` 在任务入口及 `up` 前拒绝自动和手动部署，Pulumi 真实更新再检查 | 空值／`false` 允许，非法值拒绝继续；preview 可执行，已运行任务按下述流程处理 |
 | Helm 检查（P2） | CI 和 CD 均安装 Helm 3.17.4；CI 两组 lint／template 已通过，本地 Helm 4.1.4 两组也通过 | 合成配置不含真实凭据或集群访问，不代替真实发布 |
-| `/ready` 测试（P2） | 八个用例覆盖原有六种依赖状态，以及 40 个 Search 饱和时探针可用、并发 ready 不排队；本地完整 pytest 154 项通过 | 同时检查探针无鉴权、失败不泄露上游内容、journal 失败不访问上游；未运行真实服务验收 |
+| `/ready` 测试（P2） | 八个用例覆盖原有六种依赖状态，以及 40 个 Search 饱和时探针可用、并发 ready 不排队；本地完整 pytest 154 项通过 | 同时检查探针无鉴权、失败不泄露上游内容、journal 失败不访问上游；公网健康状态返回 200，真实故障注入仍未执行 |
 | 依赖与 Action 锁定（P2） | 部署辅助依赖列出 PyPI SHA256，安装启用 `--require-hashes --only-binary=:all:`；Actions 引用完整 commit SHA | 保留对应主版本注释，更新时重新核对来源和锁定值；应用 `uv.lock`／Go `go.sum` 继续使用 |
 | 环境配置公开边界（P2） | 实际 dev YAML 已忽略；公开模板使用占位符，CI 从三个非秘密 Variables 生成 | 标识已上传，不增加 Secret；继续检查其他环境信息的公开边界 |
 | 初始化凭据恢复（P2） | 先查询专用用户；凭据缺失且用户存在时，生成新凭据和 DDL 前停止，并输出恢复指引 | 不重设旧密码；首次创建使用明确 CREATE USER，凭据更新原子替换，临时文件忽略；恢复行为尚未执行数据库验收 |
@@ -284,9 +284,9 @@ API 地址、集群 UID 和租户标识属于环境信息，不等同于密码�
 
 默认保留单 worker，已增加 Helm `workers` 参数及正整数 schema 校验；CD 的 `AML_ADAPTER_WORKERS` 传入 Pulumi，再配置 Uvicorn `--workers`，不增加 Pod 副本数。结合总并发预算和负载测量选值，比较吞吐、P50／P95、错误率、CPU／内存、journal 锁等待、数据库及 embedding 压力后再增加，不把固定多个 worker 作为正式参评的前置要求。
 
-以下运行条件尚未验收，不能仅由静态代码判定通过：
+运行验收按具体版本记录，剩余范围如下：
 
-1. **只读 Memoria 容器**：对实际部署 digest，在 UID 1000、只读根文件系统、仅 `/tmp` 可写的条件下，验收启动、迁移、健康检查、真实写入／检索与重启。当前自有 Dockerfile 直接执行 `memoria serve`，模板也覆盖启动命令；已读取的 serve 日志写标准输出，插件仓库临时文件使用临时目录，未找到已确认的 `/tmp` 外必需写入。若实测失败，应依据明确路径增加最小可写挂载或修正配置；不预先关闭只读限制。来源分支可更新，结论必须关联实际 SHA／digest，不能泛化到所有 0.5.x 镜像。
+1. **只读 Memoria 容器**：当前交付状态所列 SHA／digest 在 UID 1000、只读根文件系统、仅 `/tmp` 可写的条件下，启动、共享及用户 schema 初始化、健康检查和真实 Add/Search 已通过，重启恢复仍未验收。自有 Dockerfile 直接执行 `memoria serve`，日志写标准输出。未来来源版本若实测需要其他可写路径，应依据证据增加最小挂载或修正配置；不预先关闭只读限制。结论关联实际 SHA／digest，不能泛化到所有 0.5.x 镜像。
 2. **公网长请求**：核对真实 SLB 产品、80／443 listener 协议及空闲／请求超时，再核对 NGINX 和客户端。当前 Kubernetes Service 为 LoadBalancer、端口标记 TCP；这只是 Service 的传输协议，不能证明云端 listener 类型和超时值。阿里云 CLB HTTP 文档区分空闲超时默认 15 秒与请求超时默认 60 秒；CLB TCP 空闲超时默认 900 秒。默认值不能替代当前实例的实际配置。[CLB HTTP](https://www.alibabacloud.com/help/en/slb/classic-load-balancer/user-guide/add-an-http-listener-1)、[CLB TCP](https://www.alibabacloud.com/help/en/slb/classic-load-balancer/user-guide/add-a-tcp-listener)
 3. **长请求验收范围**：5 分钟无中间响应的请求可作为初步检查，但不能验证 900 秒限制或接近 AML 允许上限的整批 Add。继续验证超过 900 秒、接近所选组别有效契约上限的静默请求，并核对真实整批 Add 的耗时、超时后的恢复和重复提交。流式心跳不能代替最终 JSON 响应的协议验收；共享 SLB 的修改由基础设施负责人处理。
 
@@ -313,13 +313,13 @@ API 地址、集群 UID 和租户标识属于环境信息，不等同于密码�
 
 本项目的 `deploy/docker/memoria.Dockerfile` 是源码构建入口，构建上下文为检出的 Memoria 仓库根目录。原源码 Dockerfile 默认 Rust 1.85，而当前 lock 含要求 1.88 的依赖；比赛构建采用 Rust 1.90.0，builder／runtime 同为 Debian Bookworm，并固定基础镜像 digest，避免构建器与运行环境的 glibc 差异。`cargo build --locked --release --bin memoria` 使用来源仓库的 Cargo.lock、vendored 依赖及 SQLX offline 数据；下载／编译采用缓存。运行镜像以 UID 1000 执行 `memoria serve`，日志写标准输出。该构建文件在 benchmark 仓库维护，无须修改所选 Memoria 分支；未来编译器要求变化需更新此文件。
 
-CI 只构建 `linux/amd64` 而不推送；CD 构建并推送至指定 Hangzhou ACR 仓库。源码模式下 `AML_MEMORIA_REPOSITORY` 默认使用适配器的同一仓库，由不同项目 tag 前缀区分两个镜像；仓库存在性及实际推送／拉取权限待验收。只有构建成功并返回有效 digest 后才进入 Pulumi／Helm；不会把新 digest 写回 GitHub Variable。记录包含请求的 ref、实际完整 commit、构建 tag／UTC 日期、镜像 digest、构建 Dockerfile hash、benchmark commit 和 Actions run。Actions summary／artifact 保存构建信息，Pulumi output 和 Memoria Pod annotation 标记来源版本。artifact 当前保留 30 天，长期评测结果应另存版本信息。
+CI 只构建 `linux/amd64` 而不推送；CD 构建并推送至指定 Hangzhou ACR 仓库。源码模式下 `AML_MEMORIA_REPOSITORY` 默认使用适配器的同一仓库，由不同项目 tag 前缀区分两个镜像；两个镜像的实际推送与 Pod 拉取已通过。只有构建成功并返回有效 digest 后才进入 Pulumi／Helm；不会把新 digest 写回 GitHub Variable。记录包含请求的 ref、实际完整 commit、构建 tag／UTC 日期、镜像 digest、构建 Dockerfile hash、benchmark commit 和 Actions run。Actions summary／artifact 保存构建信息，Pulumi output 和 Memoria Pod annotation 标记来源版本。artifact 当前保留 30 天，长期评测结果应另存版本信息。
 
 当前 ACR registry 为 `registry.cn-hangzhou.aliyuncs.com`，namespace 为 `moc-pub`，repository 统一为 `plugin`。tag 采用用户指定的 `<project>-<YYYYMMDD>-<7 位 SHA>` 格式；project 分别为 `aml-memory-adapter` 与 `aml-memoria`，日期统一取工作流生成 tag 时的 UTC 构建日期，SHA 来自各自的实际源码版本。共享 repository 由项目前缀区分，实际部署引用为 `<registry>/<ACR namespace>/<repository>@sha256:<digest>`。完整源码 SHA 仍保存在版本记录，不依赖短 SHA 追溯。ACR namespace 与 Kubernetes namespace `aml-memory-benchmarks` 是独立概念；可选现成 Memoria 镜像保留 `moc-pub/memoria` 的有效 digest 引用。完整示例和 Variable 填写规则见 [镜像名称结构](../../deploy/README.md#镜像名称结构)。
 
 `main` 或其他分支在不同运行中可以更新；重放某次 preview／评测时可把实际 SHA 填入 `memoria_ref`，或改用那次镜像 digest。镜像 tag 只用于查找，实际发布与回退使用 digest；源码版本固定与最终镜像版本均可追溯。preview 后若分支改变，下一次默认分支 deploy 可能构建不同版本，需用记录的 SHA 指定相同来源。
 
-保留 `image` 模式用于部署现成镜像与回退，手动 `memoria_build_mode` 可覆盖本次选择；`configured` 按 Variable 或 JSON 中默认模式执行。该模式要求 `AML_MEMORIA_IMAGE=repository@sha256:...`，跳过 Memoria checkout／构建。现有 Variable 沿用 gitops dev 的 `apiserver-20260817-a8c0397-dbfc6241`，不是源码模式的默认版本，也没有已确认的完整源码 SHA。源码 CI 构建已通过；两种模式的真实 Add/Search 兼容性均待验收。
+保留 `image` 模式用于部署现成镜像与回退，手动 `memoria_build_mode` 可覆盖本次选择；`configured` 按 Variable 或 JSON 中默认模式执行。该模式要求 `AML_MEMORIA_IMAGE=repository@sha256:...`，跳过 Memoria checkout／构建。现有 Variable 沿用 gitops dev 的 `apiserver-20260817-a8c0397-dbfc6241`，不是源码模式的默认版本，也没有已确认的完整源码 SHA。当前源码构建版本的真实 Add/Search 已通过；该既有现成镜像的运行兼容性仍待验收。
 
 #### ACR 镜像发布兼容性
 
@@ -335,10 +335,34 @@ commit 和 Actions run 继续写入原有版本记录／镜像标签；这类记
 
 ### 当前交付状态
 
-已编写通用 `/ready`、离线 CI、阿里云 dev CD、独立 Pulumi／Helm 配置、数据库初始化和凭据配置脚本。目标集群、现有证书控制器和 Issuer 已只读核实；数据库用户／角色／专用库已创建。GitHub `KUBECONFIG` 已替换为用户提供的阿里云 unit 配置，四个运行 Secret 及镜像 Variables 已配置；既有 Pulumi token 和组织 ACR 凭据的实际发布权限、embedding key 的实际模型调用仍需验证。
+**阿里云 dev 首次完整部署和公网最小联调已完成。**
+[部署 run 37459492335](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37459492335)
+于 2026-10-06 成功完成，使用 benchmark commit `3048f6bab82966ee63c25fbf5f6cb51cadf87c6d`，
+总耗时约 14 分 48 秒。离线检查、源码构建、两个 ACR 镜像推送、Pulumi up、Pod 拉取与
+证书等待均通过；现有 Pulumi token、registry 和数据库运行凭据满足本次发布。
 
-Memoria 默认源码构建与来源分支选择已接入 CI/CD，默认 ref 为 `main`；源码 CI 构建已通过，尚未推送新镜像。现成镜像模式保留 gitops dev 已保存且固定 digest 的版本用于可选发布，实际 API／数据库运行兼容性和 embedding 可用性均尚未验收。
+| 应用 | 实际版本 |
+|---|---|
+| 适配器 | `registry.cn-hangzhou.aliyuncs.com/moc-pub/plugin@sha256:c273b9605da1ec63f4462c8253d3254399c54ebd01a6cf55767b0105d36e4164` |
+| Memoria | `registry.cn-hangzhou.aliyuncs.com/moc-pub/plugin@sha256:f4c4c21c6d1cfe8f1623f58c6b1e11df9ed0f4e0a8a00e98455dacf3852b3721` |
+| Memoria 来源 | `matrixorigin/memoria`，ref `main`，实际 SHA `e180dff308447efb487f313187968e77323dd33f` |
 
-代码与配置通过本分支 PR 交付；应用资源尚未部署，公网域名 `aml.cn-dev.matrixone.tech` 已解析到 NGINX 公网入口，证书尚未申请。冻结、worker 参数、Helm 检查、ready 用例、依赖锁定、私有配置和初始化恢复保护已编写；离线 CI 的 Ruff、154 个 pytest 用例、Helm 3.17.4 两组检查、两个镜像构建及 Go 编译均通过。探针隔离修复的本地完整 pytest 为 154 项通过。多库模板与初始化授权已修正；真实 Add/Search 和基准尚未运行，真实镜像只读运行、公网长请求和数据库恢复行为仍待验收。正式发布及质量验收需分别完成。
+两个 Deployment 均为 1/1 Ready、验收时无重启，20Gi journal PVC Bound。
+Ingress 为 `aml.cn-dev.matrixone.tech`，公网地址 `47.97.230.53`，`aml-tls` Certificate Ready。
+使用正常 HTTPS 证书验证请求公网 `/health` 和 `/ready` 均为 200，匿名 `/search` 为 401。
+Memoria 实际以 UID 1000、只读根文件系统运行，显式采用多库及独立共享库配置。
+
+本项目现有 `src.smoke` 通过公网适配器与临时 Memoria Service 转发完成 7 项联调：
+owner 范围认证、同步 Add 后立即 Search、跨会话检索、用户隔离、幂等重试、top_k、空用户。
+耗时 16.32 秒；真实数据库初始化、写入／检索与上海 `BAAI/bge-m3` 配置下的调用通过。
+测试只使用随机 UUID 用户，测试记忆随后逻辑停用，临时转发已关闭；用户库、journal
+及历史快照没有物理删除。此测试不等同于 AML 官方 Smoke，不产生榜单质量分数，也未
+独立校验模型原始向量维度。
+
+剩余运行验收包括单项更新时未选 Pod 的保留、重启及未知写入恢复、公网长请求与真实
+SLB 超时、容量／P50／P95、凭据丢失恢复及数据物理清理策略。旧现成镜像模式未作运行验收。
+本项目的 Answer/Eval、基准质量与正式 AML Smoke／Full 也未由本次部署执行；部署成功
+不代表正式参评就绪。发布冻结、worker 参数、Helm 检查、ready 用例、依赖锁定、私有配置
+及初始化恢复保护均保留现有设计。
 
 后续代码和实验通过本项目任务／PR 共建。旧独立 Memoria 路径未迁入；既有核实结论见 [Issue #1 独立修正评论](https://github.com/matrixorigin/memory_benchmarks/issues/1#issuecomment-5987006462)。
