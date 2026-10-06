@@ -25,7 +25,7 @@ CI/CD、Memoria 部署模板和自动证书配置已合入 `memory_benchmarks` �
 | 部分 | 代码／配置状态 | 已执行的工作 | 待验证／待完成 |
 |---|---|---|---|
 | 离线 CI | 单个 `checks` job 执行 Ruff、pytest、Helm lint／template、适配器镜像构建、Go Pulumi 检查；八个健康探针用例；不构建 Memoria | 已有 CI 运行通过，pytest 为 154 passed、1 warning；Helm 3.17.4 两组检查及适配器镜像构建通过 | 当前提交以 PR checks 为准；CI 不推送镜像或部署 |
-| benchmark workflow | 已编写手动选择 LoCoMo／LongMemEval-S、固定数据校验、Summary 与 artifact；复用已有执行程序 | 来源 revision、大小与 SHA256 已获取，未调用线上 benchmark | 首次 Actions 小集运行及质量基线待验收；无 Answer/Eval |
+| benchmark workflow | 手动选择 LoCoMo／LongMemEval-S、固定数据校验、Summary 与 artifact；复用已有执行程序 | Actions LoCoMo 1 个完整历史已成功执行，证据召回基线见下文 | 更大样本、LongMemEval-S 和 Answer/Eval 待验收；无正式质量分数 |
 | dev CD | main 手动 preview／deploy、冻结检查、单项更新选择；自动部署默认关闭 | 首次完整 CD 成功，两个镜像推送和 Pulumi up 通过 | 真实单项更新保留效果仍待验收 |
 | Memoria 部署 | 源码／现成镜像模式、分支选择、版本记录及数据库／embedding 配置 | 源码模式部署通过，实际 Pod 在非 root／只读根文件系统下 Ready | 现成镜像模式与重启恢复仍待验收 |
 | Add/Search 部署 | Deployment、Service、journal PVC 和 `/ready` | PVC Bound；公网真实 Add/Search 七项最小联调通过 | 持久性、未知写入恢复及容量仍待验收 |
@@ -276,6 +276,47 @@ AML 分数，未设置无基线支持的质量门槛。
 保留多个待执行任务。第一版无跨 Actions run 自动续跑；重新触发生成新 UUID，原数据
 按既有保留期限管理，artifact 过期不代替后台物理清理。
 首次小集 Actions 运行尚未验收；使用步骤和指标定义见[benchmark 说明](../benchmarks/CI.md)。
+
+### 检索基线与评测扩展顺序
+
+[Actions run 37467293196](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37467293196)
+于 2026-10-06 成功完成 LoCoMo-Refined 的首个完整历史，使用 benchmark commit
+`e06fd477190cb1e7c1d716147f4171d85a342574`、`histories=1`、`top_k=100`。
+证据来自该 run 的 `selection.json` 和 `summary.json` artifact；后端标签为
+`current-dev`，不是已验证的 Memoria commit／digest，不能据此复现具体后端版本。
+
+| 指标 | 本次结果 |
+|---|---|
+| 执行耗时，不含数据准备 | 705.34 秒，约 11 分 45 秒 |
+| 已完成 Add 分块 | 28 |
+| 问题记录／实际 Search／多模态跳过 | 138／87／51 |
+| 具有 gold evidence 的已检索问题 | 86 |
+| 平均证据召回率 | 80.23% |
+| 全部证据命中率 | 79.07% |
+| 空检索结果 | 0 |
+| Search P50／P95 | 0.95／2.71 秒，包含重试 |
+
+此结果证明当前公网评测链路可完成该样本的写入与检索，并提供首个检索诊断基线。
+它不代表答案正确率、正式 AML 成绩或总体质量；一个历史的样本覆盖有限，且 Top K 100
+需要结合返回证据量／预算解释，不能只以高召回认定比赛质量。
+
+后续按以下顺序推进，不为每套数据集另建 workflow：
+
+1. **扩大现有 LoCoMo 覆盖**：保持后端与配置固定，先用 `histories=3`／`5` 查看
+   不同历史和类别结果；再评估全 10 个历史。当前 Execute 限时 120 分钟，扩大前需核对
+   写入量和实际耗时，不能把单历史时长视为全量保证。以固定样本做后续变更对照。
+2. **运行已接入的 LongMemEval-S**：同一 workflow 选择 `longmemeval`，先用
+   `histories=1` 验证链路，再扩至 `10`。每个历史只有一道问题，1 或 10 个历史主要用于
+   初步验证，不能代表完整 500 题质量或覆盖全部能力；正式基线需后续扩展样本范围。
+3. **补齐质量评分**：接入 Answer/Eval，固定回答模型、提示词、证据预算和裁判规则，
+   使用原数据已有 gold answer／evidence 评分，保持 gold 不进入 Add/Search。
+   同时比较 Recall@K、预算内证据、答案质量和时延；不把证据召回率当作答案分数。
+4. **补有针对性的回归样本**：多用户隔离、幂等重试、时间顺序／事实更新、跨会话聚合及
+   无答案场景应形成固定小集，复用现有契约测试并补齐实际缺口。它们是本项目开发测试，
+   不宣称等价于 AML 七维官方评测。
+5. **按需要扩展数据集**：BEAM 可作为后续长历史评测，先选短历史并限定预算，再接入
+   Actions；PersonaMem-v2 等需明确所测能力和原生评分。ScriptMem 等原始数据未取得的
+   数据集暂不新增可运行选项。公开数据准备、样本选择和评分定义完成后再扩展入口。
 
 ### dev CI/CD
 
