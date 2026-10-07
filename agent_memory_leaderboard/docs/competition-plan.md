@@ -27,7 +27,8 @@
 
 参赛组别与模型要求仍需按最新官方材料对齐。2026-10-07 核对时，官方 Full checklist
 已写 Open-source Methods 的 Add 阶段期望使用 `gpt-4o-mini`；赛事 FAQ 仍采用
-学术／工业分类，学术榜 embedding 指定 `text-embedding-v4`，开放权重模型建议工业榜。
+学术／工业分类，学术榜 embedding 指定 `text-embedding-v4`，LLM 组件指定
+`gpt-4o-mini`，reranker 不限制；开放权重模型建议工业榜。
 不能继续笼统写“模型规则完全未出现”，也不能自行将两套组别名称等同。上海 bge-m3
 的正式参评资格、纯存储且不调用 LLM 的 Add 是否适用该要求，仍需官方明确；当前
 运行配置是开发验证配置，不作为合规确认。[官方文档](https://agentmemories.ai/zh-cn/docs)、
@@ -94,6 +95,15 @@ prompt/scorer version、token encoding、输入／输出预算进入运行契约
 gold 只进入评分器／裁判，不进入回答模型。按 LME 问题类别使用不同的本地 rubric，
 LoCoMo 显示 Token F1 与 BLEU-1；本地 judge 明确不宣称原生评分器等价或官方 AML 分数。
 原生 evaluator 对齐和正式模型资格确认仍是独立验收项。
+
+本地开发回答与裁判均选择百炼北京端点
+`https://dashscope.aliyuncs.com/compatible-mode/v1` 的 `qwen-plus`，便于复用已有服务。
+GitHub Actions 的 4 个模型／端点 Variables 与 2 个 API_KEY Secrets 已于 2026-10-07
+配置并回读确认，密钥不入库；示例 env 同步该非秘密配置。未因此执行真实模型验证或
+建立质量基线。该配置仅作用于 benchmark 进程，不改变已部署 Memoria、embedding
+或官方 Answer/Eval，也无须重新部署服务。下一次小集选择 answer-eval、LoCoMo
+1 个完整历史、Top K 100。回答与裁判同模型仅用于本地诊断，不证明独立评分或官方
+等价；qwen-plus 是可更新别名，跨日期算法对比需固定可用快照及其他实验变量。
 
 预算为包含指令、角色、问题、选项／问题日期、证据的整个回答输入，上限 117760，
 按固定 o200k_base 加 256 token 余量计数；它是本地近似，不保证等于任意模型的实际
