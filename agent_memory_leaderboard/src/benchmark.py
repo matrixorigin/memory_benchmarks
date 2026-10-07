@@ -1,11 +1,10 @@
-"""Run public memory datasets through AML Add/Search; retrieval diagnostics only."""
+"""Run public memory datasets through AML Add/Search with optional local Answer/Eval."""
 
 import argparse
 import hashlib
 import json
 import os
 import re
-import tempfile
 import time
 import uuid
 from datetime import UTC, datetime
@@ -13,37 +12,36 @@ from pathlib import Path
 
 import httpx
 
+from .checkpoint import checkpoint, load, question_dir, save, save_question
 from .datasets import ADAPTERS, DATASETS, normalize
+from .diagnostics import RetryAudit, adapter_reason_code
+from .evaluation import AnswerEvaluator, EvaluationConfig, ModelError
+from .evidence import SourceManifest, prefix_recalls, recall, source_messages
 from .models import AddResponse, SearchResponse
 from .privacy import apply_policy, evidence_audit
 from .smoke import call_adapter
 
 
 def batches(conversation):
-    """Ingest only original dialogue and source dates, never QA or summaries."""
-    sessions = sorted(
-        (s for s in conversation if re.fullmatch(r"session_\d+", s)),
-        key=lambda s: int(s.split("_")[1]),
-    )
-    for session in sessions:
-        batch, words, index = [], 0, 0
-        for turn in conversation[session]:
-            content = (
-                f"[dialogue:{turn['dia_id']}] "
-                f"[{conversation[session + '_date_time']}] "
-                f"{turn['speaker']}: {turn['text']}"
-            )
-            count = len(content.split())
-            if batch and (len(batch) == 20 or words + count > 2000):
-                yield session, index, batch
-                batch, words, index = [], 0, index + 1
-            batch.append({"role": turn.get("role", "user"), "content": content})
-            words += count
-        if batch:
+    """Original dialogue, roles and source dates only; no source/evaluation labels."""
+    batch, words, index, current = [], 0, 0, None
+    for session, _, _, message in source_messages(conversation):
+        count = len(message["content"].split())
+        if current != session:
+            if batch:
+                yield current, index, batch
+            batch, words, index, current = [], 0, 0, session
+        if batch and (len(batch) == 20 or words + count > 2000):
             yield session, index, batch
+            batch, words, index = [], 0, index + 1
+        batch.append(message)
+        words += count
+    if batch:
+        yield current, index, batch
 
 
 def evidence_ids(contents):
+    """Legacy labeled-report helper; new runs use SourceManifest."""
     return set(re.findall(r"\[dialogue:([^\]]+)\]", "\n".join(contents)))
 
 
@@ -58,55 +56,25 @@ def evidence_score(expected, contents):
 def evidence_prefix_scores(expected, contents, top_k):
     """Recall of prefixes from this one Search response, without extra requests."""
     cutoffs = sorted({1, 5, 10, 20, 50, 100, top_k})
-    return {
-        str(k): evidence_score(expected, contents[:k]) for k in cutoffs if k <= top_k
-    }
-
-
-def adapter_reason_code(response):
-    """Recognize fixed adapter reasons without persisting response text or values."""
-    reasons = {
-        (503, "Prior write outcome is unknown; retry the same Add later"):
-            "write_outcome_unknown",
-        (503, "Memoria write is persisted but not yet searchable; retry Add"):
-            "write_not_searchable",
-        (403, "Memoria denied the request; review user scope and content policy"):
-            "memoria_request_denied",
-        (503, "Memoria connection unavailable"): "memoria_connection_unavailable",
-    }
-    if len(response.content) > 8192:
-        return None
-    try:
-        data = response.json()
-    except ValueError:
-        return None
-    detail = data.get("detail") if isinstance(data, dict) else None
-    reason = detail.get("reason") if isinstance(detail, dict) else None
-    if not isinstance(reason, str):
-        return None
-    return reasons.get((response.status_code, reason))
-
-
-def save(path, report):
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    path.parent.chmod(0o700)
-    # mkstemp creates mode 0600 immediately, even in standalone diagnostic tools
-    # whose process umask is permissive. Unique names avoid temporary-file races.
-    descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary = Path(name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(report, stream, indent=2)
-            stream.write("\n")
-        temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    return {str(k): evidence_score(expected, contents[:k]) for k in cutoffs if k <= top_k}
 
 
 def summarize(report):
     questions = list(report["questions"].values())
     recalls = [q["evidence_recall"] for q in questions if q.get("evidence_recall") is not None]
+    evaluations = [q["evaluation"] for q in questions if "evaluation" in q]
+
+    def mean(key):
+        values = [e[key] for e in evaluations if e.get(key) is not None]
+        return sum(values) / len(values) if values else None
+
     return {
+        "scored_questions": sum("local_judge_score" in e for e in evaluations),
+        "evaluation_pending_questions": sum(bool(q.get("evaluation_pending")) for q in questions),
+        "mean_local_judge_score": mean("local_judge_score"),
+        "mean_token_f1": mean("token_f1"),
+        "mean_bleu1": mean("bleu1"),
+        "mean_budget_evidence_recall": mean("budget_evidence_recall"),
         "completed_add_chunks": len(report["completed_adds"]),
         "processed_questions": len(questions),
         "searched_questions": sum("returned" in q for q in questions),
@@ -126,35 +94,48 @@ def run(args):
     selected = normalize(
         dataset[: None if getattr(args, "all", False) else args.conversations], args.kind
     )
+    mode = getattr(args, "mode", "retrieval")
+    evaluation_config = EvaluationConfig.from_env() if mode == "answer-eval" else None
+    evaluator = AnswerEvaluator(evaluation_config, args.kind) if evaluation_config else None
     contract = {
         "dataset_sha256": hashlib.sha256(raw).hexdigest(),
         "conversations": [c["sample_id"] for c in selected],
         "adapter_url": args.adapter_url,
         "top_k": args.top_k,
-        "runner_version": 1,
+        "runner_version": 2,
+        "ingestion_version": "label-free-exact-hash-v1",
+        "mode": mode,
+        "evaluation": evaluation_config.contract() if evaluation_config else None,
         "kind": args.kind,
     }
     if args.resume:
-        report = json.loads(args.output.read_text())
+        report = load(args.output)
         report["contract"].setdefault("kind", "locomo")
         if report["contract"] != contract:
             raise ValueError("Resume configuration differs from the recorded run")
     else:
-        if args.output.exists():
+        if (
+            args.output.exists()
+            or question_dir(args.output).exists()
+            or args.output.with_suffix(".requests.jsonl").exists()
+            or (args.output.parent / (args.output.stem + ".sources")).exists()
+        ):
             raise ValueError("Output already exists; use --resume or choose a new file")
         report = {
             "run_id": uuid.uuid4().hex,
             "contract": contract,
-            "mode": "retrieval-only",
+            "mode": mode,
+            "checkpoint_format": 2,
             "official_aml_score": False,
             "evidence_unit": DATASETS[args.kind]["evidence_unit"],
             "source": DATASETS[args.kind]["source"],
             "completed_adds": [],
             "questions": {},
-            "question_audit_version": 1,
+            "question_audit_version": 2,
             "users": [],
             "notes": [
-                "Evidence-ID recall, not answer accuracy or an official AML score.",
+                "Exact-content source attribution; ambiguous/unmapped records are not credited.",
+                "Local diagnostics, not an official AML score or native judge reproduction.",
                 "Text-only ingestion; questions marked multimodal are skipped.",
                 "Local whitespace chunking, not AML's frozen adapter.",
                 "Run-scoped memories retained for diagnosis and resume.",
@@ -163,6 +144,10 @@ def run(args):
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.parent.chmod(0o700)
     apply_policy(report)
+    if evaluator:
+        report["privacy"]["private_cache"] = (
+            "Retrieved evidence and generated answers; excluded from CI artifacts; same retention"
+        )
     if deadline := report["privacy"].get("delete_by"):
         if datetime.now(UTC) >= datetime.fromisoformat(deadline):
             raise ValueError(
@@ -184,7 +169,22 @@ def run(args):
     headers = {}
     if key := os.getenv("ADAPTER_API_KEY"):
         headers["Authorization"] = f"Bearer {key}"
-    save(args.output, report)
+    retry_audit = RetryAudit(args.output.with_suffix(".requests.jsonl"))
+    private_root = getattr(args, "private_dir", None) or args.output.parent / ".private"
+    private_root = private_root / report["run_id"]
+    report["request_diagnostics"] = retry_audit.summary()
+
+    def persist(*, final=False):
+        report["request_diagnostics"] = retry_audit.summary()
+        checkpoint(args.output, report, final=final)
+
+    def call(http, path, body, identity):
+        request_hash = hashlib.sha256((path + identity).encode()).hexdigest()
+        return call_adapter(
+            http, args.adapter_url, headers, path, body, observe=retry_audit.observer(request_hash)
+        )
+
+    persist()
     try:
         with httpx.Client(timeout=1800, trust_env=False) as http:
             http.get(args.adapter_url.rstrip("/") + "/health").raise_for_status()
@@ -193,14 +193,21 @@ def run(args):
                 user = f"{args.kind}:{report['run_id']}:{sample}"
                 if user not in report["users"]:
                     report["users"].append(user)
+                manifest = SourceManifest(conversation["conversation"])
+                manifest_path = (
+                    args.output.parent
+                    / (args.output.stem + ".sources")
+                    / (hashlib.sha256(sample.encode()).hexdigest() + ".json")
+                )
+                save(manifest_path, manifest.dump())
                 for session, index, messages in batches(conversation["conversation"]):
                     rid = f"{user}:{session}:{index}"
                     if rid in completed:
                         continue
                     report.update(stage="add", current=rid)
-                    save(args.output, report)
+                    persist()
                     body = dict(request_id=rid, user_id=user, session_id=session, messages=messages)
-                    response = call_adapter(http, args.adapter_url, headers, "/add", body)
+                    response = call(http, "/add", body, rid)
                     if not isinstance(response, dict) or response.get("success") is not True:
                         raise ValueError("Add response requires explicit success=true")
                     result = AddResponse.model_validate(response)
@@ -211,7 +218,7 @@ def run(args):
                         raise ValueError("Add ID mismatch")
                     report["completed_adds"].append(rid)
                     completed.add(rid)
-                    save(args.output, report)
+                    persist()
                     print(f"Added {sample}/{session}/{index}", flush=True)
                 source_ids = {
                     turn["dia_id"]
@@ -221,36 +228,46 @@ def run(args):
                 }
                 for i, question in enumerate(conversation["qa"]):
                     qid = question.get("id", f"{sample}#q{i:04d}")
-                    if qid in report["questions"]:
+                    previous = report["questions"].get(qid)
+                    if previous is not None and not previous.get("evaluation_pending"):
                         continue
                     report.update(stage="search", current=qid)
-                    save(args.output, report)
-                    if question.get("is_multi_modality"):
+                    persist()
+                    cache_path = private_root / (hashlib.sha256(qid.encode()).hexdigest() + ".json")
+                    if previous and previous.get("evaluation_pending"):
+                        record = previous
+                        contents = json.loads(cache_path.read_text())["contents"]
+                    elif question.get("is_multi_modality"):
                         record = {"skipped": "multimodal"}
                     else:
                         start = time.monotonic()
                         result = SearchResponse.model_validate(
-                            call_adapter(
+                            call(
                                 http,
-                                args.adapter_url,
-                                headers,
                                 "/search",
-                                dict(user_id=user, query=question["question"], top_k=args.top_k),
+                                dict(
+                                    user_id=user,
+                                    query=question["question"],
+                                    top_k=args.top_k,
+                                ),
+                                qid,
                             )
                         )
                         if len(result.data) > args.top_k:
                             raise ValueError("Search exceeded top_k")
                         contents = [r.content for r in result.data]
+                        ranked_ids, mapping = manifest.audit(contents)
                         record = {
+                            "source_attribution": mapping,
                             "category": question["category"],
                             "returned": len(result.data),
                             "latency_seconds": time.monotonic() - start,
-                            "evidence_recall": evidence_score(
-                                question.get("evidence", []), contents
+                            "evidence_recall": recall(question.get("evidence", []), ranked_ids),
+                            "retrieved_evidence_ids": sorted(
+                                {s for ids in ranked_ids for s in ids}
                             ),
-                            "retrieved_evidence_ids": sorted(evidence_ids(contents)),
-                            "evidence_recall_at_k": evidence_prefix_scores(
-                                question.get("evidence", []), contents, args.top_k
+                            "evidence_recall_at_k": prefix_recalls(
+                                question.get("evidence", []), ranked_ids, args.top_k
                             ),
                             "unmatched_gold_evidence": sorted(
                                 set(question.get("evidence", [])) - source_ids
@@ -273,8 +290,26 @@ def run(args):
                         )
                         record["evidence_file"] = str(evidence_path.relative_to(args.output.parent))
                     record["sample_id"] = sample
+                    if evaluator and "skipped" not in record:
+                        if not previous:
+                            save(cache_path, {"contents": contents})
+                            record["evaluation_pending"] = True
+                            report["questions"][qid] = record
+                            save_question(args.output, qid, record)
+                            persist()
+                        report.update(stage="answer-eval", current=qid)
+                        persist()
+                        evaluation = evaluator.evaluate(question, contents, cache_path)
+                        ranked_ids, _ = manifest.audit(contents)
+                        evaluation["budget_evidence_recall"] = recall(
+                            question.get("evidence", []),
+                            ranked_ids[: evaluation["context_records"]],
+                        )
+                        record["evaluation"] = evaluation
+                        record.pop("evaluation_pending", None)
                     report["questions"][qid] = record
-                    save(args.output, report)
+                    save_question(args.output, qid, record)
+                    persist()
                 print(f"Finished {sample}", flush=True)
         report["status"] = "completed"
     except (Exception, KeyboardInterrupt) as exc:
@@ -282,6 +317,8 @@ def run(args):
             status="interrupted" if isinstance(exc, KeyboardInterrupt) else "failed",
             error={"type": type(exc).__name__},
         )
+        if isinstance(exc, ModelError):
+            report["error"].update(phase=exc.phase, reason_code=exc.reason, http_status=exc.status)
         if isinstance(exc, httpx.HTTPStatusError):
             report["error"]["http_status"] = exc.response.status_code
             if code := adapter_reason_code(exc.response):
@@ -291,7 +328,7 @@ def run(args):
         if report["status"] in {"completed", "failed", "interrupted"}:
             apply_policy(report, datetime.now(UTC))
         report["summary"] = summarize(report)
-        save(args.output, report)
+        persist(final=True)
     print(json.dumps({k: report[k] for k in ("status", "error", "summary")}, indent=2))
     return 0 if report["status"] == "completed" else 1
 
@@ -317,11 +354,15 @@ def main(default_kind="locomo", default_output=None):
     parser.add_argument("--all", action="store_true", help="Run every history in this dataset")
     parser.add_argument("--top-k", type=int, default=100)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--mode", choices=["retrieval", "answer-eval"], default="retrieval")
+    parser.add_argument(
+        "--private-dir", type=Path, help="Private resumable answer cache; do not upload"
+    )
     parser.add_argument("--runtime-label", help="Record the backend revision for this attempt")
     args = parser.parse_args()
     args.dataset = args.dataset or Path(DATASETS[args.kind]["path"])
-    if args.conversations < 1 or args.top_k < 1:
-        parser.error("conversations and top-k must be positive")
+    if args.conversations < 1 or not 1 <= args.top_k <= 100:
+        parser.error("conversations must be positive; top-k must be 1–100")
     raise SystemExit(run(args))
 
 

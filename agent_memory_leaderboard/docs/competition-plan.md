@@ -25,6 +25,14 @@
 认定完全复现 AML 内部选题或评分；正式文本 Full 的任务范围以官方配置为准。
 后续评测扩展仅纳入文本任务和文本能力回归，不要求多模态或代码赛道能力。
 
+参赛组别与模型要求仍需按最新官方材料对齐。2026-10-07 核对时，官方 Full checklist
+已写 Open-source Methods 的 Add 阶段期望使用 `gpt-4o-mini`；赛事 FAQ 仍采用
+学术／工业分类，学术榜 embedding 指定 `text-embedding-v4`，开放权重模型建议工业榜。
+不能继续笼统写“模型规则完全未出现”，也不能自行将两套组别名称等同。上海 bge-m3
+的正式参评资格、纯存储且不调用 LLM 的 Add 是否适用该要求，仍需官方明确；当前
+运行配置是开发验证配置，不作为合规确认。[官方文档](https://agentmemories.ai/zh-cn/docs)、
+[赛事 FAQ](https://agentmemoryleaderboard.ai/competition/)
+
 ## CI/CD 交付概要与 Review 入口
 
 CI/CD、Memoria 部署模板和自动证书配置已合入 `memory_benchmarks` 的 `origin/main`。
@@ -38,7 +46,7 @@ CI/CD、Memoria 部署模板和自动证书配置已合入 `memory_benchmarks` �
 | 部分 | 代码／配置状态 | 已执行的工作 | 待验证／待完成 |
 |---|---|---|---|
 | 离线 CI | 单个 `checks` job 执行 Ruff、pytest、Helm lint／template、适配器镜像构建、Go Pulumi 检查；八个健康探针用例；不构建 Memoria | 已有 CI 运行通过，pytest 为 154 passed、1 warning；Helm 3.17.4 两组检查及适配器镜像构建通过 | 当前提交以 PR checks 为准；CI 不推送镜像或部署 |
-| benchmark workflow | 手动选择 LoCoMo／LongMemEval-S、固定数据校验、Summary 与 artifact；复用已有执行程序 | LoCoMo 1 个历史成功；3 个历史在第三个 Add 失败；LongMemEval-S 首个历史在 Add 失败，见下文 | 写入失败修复、完整扩展样本和 Answer/Eval 待验收；无正式质量分数 |
+| benchmark workflow | 手动选择 LoCoMo／LongMemEval-S、固定数据校验、Summary 与 artifact；Recall@K 及逐题审计 | 修复后 LoCoMo 3 个历史的 101 个 Add／242 次 Search、LongMemEval-S 首个历史的 69 个 Add／1 次 Search 完整通过 | 本地代码已补标签隔离、可选 Answer/Eval、预算内召回和重试观测；新契约尚未运行验收，无正式质量分数 |
 | dev CD | main 手动 preview／deploy、冻结检查、单项更新选择；独立 build／deploy runner；自动部署默认关闭 | 首次完整 CD 及固定镜像单项更新成功，适配器 Pod 保留 | 新版源码模式端到端发布仍待验收 |
 | Memoria 部署 | 源码／现成镜像模式、分支选择、版本记录及数据库／embedding 配置 | main 源码产物以固定 digest 更新成功，新 Pod Ready，单项更新保留适配器 | 源码构建与部署的 runner 磁盘预算、未知写入恢复仍待验收 |
 | Add/Search 部署 | Deployment、Service、journal PVC 和 `/ready` | PVC Bound；公网真实 Add/Search 七项最小联调通过 | 持久性、未知写入恢复及容量仍待验收 |
@@ -51,7 +59,76 @@ CI/CD、Memoria 部署模板和自动证书配置已合入 `memory_benchmarks` �
 交付范围包括 `.github/`、`deploy/`、`/ready`、测试和本目录方案文档；后续变更继续通过 PR
 交付到 `origin/main`。实际 dev 配置、凭据和本地运行产物排除提交。
 
-### 源码导航
+## 本地质量闭环与诊断设计
+
+实现与操作说明统一见[评测与诊断](../benchmarks/EVALUATION.md)；Actions 配置见
+[benchmark workflow](../benchmarks/CI.md)。以下能力已在本地开发分支实现，尚未建立
+新契约下的真实质量基线，不能以旧运行结果作为这些代码的验收证据。
+
+### 输入隔离与来源归属
+
+runner version 2 只写入原始文本、角色、speaker 和来源日期；不把来源 ID、gold、
+`answer_` session 标签、QA 摘要或 judge 规则写入记忆。LME 使用中性本地 session ID，
+映射不进入 Add/Search。共享纯函数保留原适配器的 role/time header 和 UTF-8 分片规则，
+由此生成本地 SHA256 来源 manifest。wire 请求／响应字段和后端存储语义不变。
+
+检索结果按完整内容 hash 匹配。无法匹配或多个来源存在相同内容时，不猜测归属，
+不计来源命中，并单独报告 unmapped／ambiguous 数。一个 LME session 内重复文本仍
+可唯一归属该 session。该诊断方法适用于当前保留原文的 Memoria 适配器；改写型记忆
+系统必须另行实现可靠的来源归属，不能直接把 hash 不匹配等同于检索失败。
+
+新契约拒绝旧标签运行的 resume，使用新的 run UUID；旧结果可读，但不与新输入
+直接做算法优劣比较。gold 异常标签仍原样披露，不在这轮自动修正。
+
+### 可选 Answer/Eval
+
+默认 retrieval 仅调用 Add/Search。answer-eval 为 LoCoMo／LongMemEval-S 增加独立的
+OpenAI-compatible 回答／裁判客户端，凭据不经过适配层。模型、endpoint、temperature、
+prompt/scorer version、token encoding、输入／输出预算进入运行契约；密钥不进入报告。
+gold 只进入评分器／裁判，不进入回答模型。按 LME 问题类别使用不同的本地 rubric，
+LoCoMo 显示 Token F1 与 BLEU-1；本地 judge 明确不宣称原生评分器等价或官方 AML 分数。
+原生 evaluator 对齐和正式模型资格确认仍是独立验收项。
+
+预算为包含指令、角色、问题、选项／问题日期、证据的整个回答输入，上限 117760，
+按固定 o200k_base 加 256 token 余量计数；它是本地近似，不保证等于任意模型的实际
+chat template/tokenizer。保留完整证据排名前缀，不跳过较大前置记录挑选后面的证据。
+报告预算内来源召回和上游 token usage；实际输入超过预算时失败。实际 usage 在响应后
+取得，因此此检查不能避免所有超限调用成本。正式可比基线前仍需确认模型计数契约。
+
+回答正文及检索上下文只存 private cache，用于 judge 失败后的续跑；artifact 只保存
+答案 hash、数值指标与安全诊断。CI private cache 在 artifact root 外，不上传。
+本地 pending 续跑需要保留该 cache，CI artifact 本身不包含完整 Answer/Eval 恢复材料。
+缓存、backend/journal 都受作业保留要求约束，不依赖 artifact 过期完成清理。
+
+### 重试观测与增量断点
+
+每个 Add/Search HTTP attempt 都记录固定状态／原因码、耗时、是否重试和请求标识 hash，
+不持久化 headers、原始 payload、响应正文或异常文字。Summary 展示中间尝试，便于
+定位恢复后的 503；不因记录了 503 就推断索引延迟或未知写入。重试集合、最多六次尝试
+和相同 Add request_id 的恢复语义保持原状。
+
+每题独立文件使用私有权限与原子替换，运行中 header 不再包含不断增长的 questions；
+最终报告合并一次，保留现有读取方式。resume／硬中断 Summary 合并完整题目文件；
+请求日志可修复尾部撕裂写。Search 完成先落 pending 断点，回答缓存成功后才进入 judge；
+进程在模型结果持久化前中断仍可能重做该模型调用。
+
+### 时间回归与容量工具
+
+`src.probes` 默认只生成计划，不发送请求；显式 execute 才运行隔离的合成用例。
+时间用例带实际 AML 毫秒 timestamp，覆盖旧、近期、新旧混合和 T1 假设阈值两侧。
+可选直接 owner-scoped Explain 只保存允许的路径 flags、数量和时延；它是另一次请求，
+不宣称必然与此前公开 Search 同路径。不修改 observed_at 或置信度衰减行为。
+
+容量工具限制逻辑请求数、并发、QPS、输入字节和调度时长，报告各 route 延迟及错误。
+逻辑 QPS 不包含内部重试，调度到期不取消已在途的写入。DB／模型压力、物理存储增长
+需要配合基础设施指标另行测量。只有实际一次成功 HTTP attempt 超过五分钟，才标记
+长请求链路验证通过；多次短重试累计超时不计通过。
+
+验收状态：新代码尚未运行 benchmark 或容量验收。验收顺序为离线行为验证，再以
+新契约执行小集；未知写入的后端幂等契约、embedding 实际 token 上限、原生评分和
+正式 AML 验收继续按 Issue #1 推进。
+
+## 源码导航
 
 | 入口 | Review 内容 |
 |---|---|
@@ -98,11 +175,13 @@ flowchart LR
     C --> NG
 ```
 
-Memoria 默认从源码 `main` 分支构建，由本项目 CD 部署，也可指定分支、tag、commit 或现成镜像；源码构建、镜像推送、dev 部署及公网 Add/Search 最小联调已通过，未修改 Memoria 源码。数据库引擎、模型服务、NGINX 和证书控制器是既有基础设施。详细设计和资源边界见下文，具体配置与操作见发布说明。
+Memoria 默认从源码 `main` 分支构建，由本项目 CD 部署，也可指定分支、tag、commit 或现成镜像；源码构建、镜像推送、dev 部署及公网 Add/Search 最小联调已通过。构建适配由本仓库 Dockerfile 完成，运行问题驱动的 Memoria 两项修复已另行合并并部署，见后文。数据库引擎、模型服务、NGINX 和证书控制器是既有基础设施。详细设计和资源边界见下文，具体配置与操作见发布说明。
 
 ## 当前工程与职责
 
-本次核实的同事仓库版本为 `main@b037c42`。
+同事原始审查版本为 `b037c42`；当前核实代码为 `origin/main@478ad09`，运行结果分别
+关联各自的 benchmark commit 和实际后端镜像。完整逐项结论见
+[Issue #1 当前核实结论](review-issue-1.md)，不将旧版问题列表直接当作当前任务状态。
 
 | 部分 | 职责与当前状态 |
 |---|---|
@@ -472,6 +551,11 @@ checkpoint 不保存中间重试原因，访问日志也只有状态码，不能
 
 LongMemEval-S 的 100% 只对应一道题，不能代表 500 题或全部能力。上述均为检索
 证据指标，没有执行 Answer/Eval、AML 官方 Smoke／Full 或生成官方分数。
+上述回归使用的旧 runner 将 `[dialogue:ID]` 写入正文；LongMemEval-S 报告中可见
+`answer_` 来源 ID，这类答案来源标签会进入 embedding 和后续可见证据。因此本轮
+是可靠性回归及现有输入下的检索诊断，尚不是无标签泄漏的质量基线；不能推断高分
+必然由标签造成。质量调优前须外置诊断映射，保持合法来源时间和角色，再重新建立
+输入一致的基线，不能直接混合比较清除标签前后的分数。
 完整报告和证据 ID／hash 位于各 run 的 `aml-benchmark-<run_id>-1` artifact，
 按既有 30 天期限保留；后台数据仍须执行既定清理。
 
@@ -482,11 +566,21 @@ LongMemEval-S 的 100% 只对应一道题，不能代表 500 题或全部能力�
 逐条停用两条合成记忆。当前路径没有复现旧时间直接阻塞 Add 的推测，不据此修改
 Memoria 衰减逻辑，也不宣称覆盖所有检索模式／配置。
 
+源码核对表明，当前部署及 Issue #1 原评论引用的 Memoria 版本，都在混合检索结果
+为空后继续执行全文回退；普通无过滤 Search 也可能走图路径。因此原评论中根据
+`MIN_CONF=0.05` 直接推断 Add 会持续失败的论证不完整，应收紧为混合候选过滤的
+条件风险。混合结果非空时不一定触发全文回退，仍需验证混合新旧证据、不同 query、
+阈值两侧和 Explain 路径。单个旧时间探针成功不证明全部时间策略正确；不能据此
+全局关闭衰减。详见 [Issue #1 时间结论](review-issue-1.md#对历史来源时间评论的更正)。
+
 上述失败运行使用 PR 前的执行程序，没有新逐题审计和 Recall@K 前缀字段。可从 artifact
 恢复逐历史指标，无法从仅有 ID／hash 的旧记录反推排序前缀。诊断文件不提交原始正文
 或密钥。数据按既有保留期限管理，artifact 到期不等于后台数据已物理删除。
 
 后续按以下顺序推进，不为每套数据集另建 workflow：
+
+质量评分和算法实验前，先移出模型可见的诊断／答案来源 ID，保留外部审计映射；
+现有带标签的结果用于运行诊断，不作为正式质量基线。
 
 1. **继续验证写入可靠性与可恢复性**：PR #277／#278 已在固定小集完成线上回归；
    补充安全的中间重试原因与次数观测，定位可恢复 503，并在扩大范围时继续验证
@@ -586,7 +680,7 @@ API 地址、集群 UID 和租户标识属于环境信息，不等同于密码�
 ### 评测负载与资源边界
 
 - 正常成功路径中，每个新记忆分片执行写入、ID 回读、搜索确认三次上游调用。设分片数为 M、外部 Search 次数为 Q，不计失败／恢复／重试，Memoria HTTP 请求量约为 **3M + Q**。20 条各不超过分片上限的消息约需 60 次上游调用；该数字不等于 SQL、模型计费次数或实际 QPS，长消息分片和重试会增加请求量。
-- 启用 embedding 时，写入和搜索探针均可能产生模型流量，数据库承担写入、去重和检索。实际调用量受配置、缓存与重试影响；当前适配器没有接上 Observe／LLM 抽取或 Answer/Eval，不能假定每条记忆消耗一次 qwen-plus。
+- 启用 embedding 时，写入和搜索探针均可能产生模型流量，数据库承担写入、去重和检索。实际调用量受配置、缓存与重试影响；当前适配器没有接上 Observe／LLM 抽取，不能假定每条记忆消耗一次 qwen-plus。可选 Answer/Eval 在独立 benchmark 进程中调用模型，不属于 Add/Search 后端逻辑。
 - 本地 benchmark runner 串行发送请求，但没有 QPS／token 预算或跨运行并发控制。适配器同步路由通过线程池执行，一个进程也可以同时处理不同请求；请求级 journal 锁不能控制整套评测的总负载。全局总并发、上游速率和总量预算尚未实现。[FastAPI 同步处理器](https://fastapi.tiangolo.com/async/#path-operation-functions)
 - owner 前缀隔离的是数据范围。共享数据库计算资源或同一模型账户时仍会竞争资源；独立 database 或新建模型 key 不自动提供独立容量。
 - 开发阶段一次运行一个任务，从小集开始记录分片数、写入吞吐、Search P50／P95、错误／429、数据库等待、模型 token／额度和数据增长。停止条件依据评测实例的预算和实测确定，不推测一个未经验证的安全 QPS。
@@ -689,4 +783,5 @@ owner 范围认证、同步 Add 后立即 Search、跨会话检索、用户隔�
 Smoke／Full 未由本次部署执行；部署成功不代表正式参评就绪。发布冻结、worker 参数、
 Helm 检查、ready 用例、依赖锁定、私有配置及初始化恢复保护继续采用现有设计。
 
-后续代码和实验通过本项目任务／PR 共建。旧独立 Memoria 路径未迁入；既有核实结论见 [Issue #1 独立修正评论](https://github.com/matrixorigin/memory_benchmarks/issues/1#issuecomment-5987006462)。
+后续代码和实验通过本项目任务／PR 共建。旧独立 Memoria 路径未迁入；未完成任务、
+验收条件和实际运行依据统一维护于 [Issue #1 当前任务清单](https://github.com/matrixorigin/memory_benchmarks/issues/1)。

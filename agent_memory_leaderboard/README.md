@@ -17,7 +17,7 @@ endpoints. Benchmarks are grouped into **Textual Datasets** (`benchmarks/textual
 Each directory owns its parser, runner entrypoint, data, and results. Shared
 HTTP validation, bounded retries, checkpointing, and reporting live in
 `src/benchmark.py`; `src/datasets.py` registers the dataset adapters. Astra is
-optional for future answer/judge stages; endpoint retrieval tests require only
+optional; local Answer/Eval uses explicit model endpoints and keys; retrieval requires only
 the Add/Search service and its Memoria backend.
 
 Implements `POST /add` and `POST /search` from the
@@ -344,3 +344,10 @@ it after dependency changes with:
 ```sh
 uv export --locked --no-dev --no-emit-project --format requirements-txt --output-file requirements.lock
 ```
+
+## Local evaluation and probes
+
+See [evaluation and diagnostics](benchmarks/EVALUATION.md) for label-free source
+attribution, optional Answer/Eval, model settings, private caches, checkpoints,
+source-time regression cases and bounded capacity probes. Retrieval remains the
+default and does not require answer/judge model credentials.

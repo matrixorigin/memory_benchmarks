@@ -9,22 +9,47 @@ def normalize(dataset):
     result = []
     for item in dataset:
         conversation = {}
-        for index, (sid, date, turns) in enumerate(zip(
-            item["haystack_session_ids"], item["haystack_dates"],
-            item["haystack_sessions"], strict=True,
-        ), 1):
+        source_ids = {sid: f"S{i}" for i, sid in enumerate(item["haystack_session_ids"], 1)}
+        for index, (sid, date, turns) in enumerate(
+            zip(
+                item["haystack_session_ids"],
+                item["haystack_dates"],
+                item["haystack_sessions"],
+                strict=True,
+            ),
+            1,
+        ):
             name = f"session_{index}"
             conversation[name + "_date_time"] = date
             conversation[name] = [
-                {"dia_id": sid, "role": turn["role"], "speaker": turn["role"],
-                 "text": turn["content"]}
+                {
+                    "dia_id": source_ids[sid],
+                    "role": turn["role"],
+                    "speaker": turn["role"],
+                    "text": turn["content"],
+                }
                 for turn in turns
             ]
         qid = item["question_id"]
-        result.append({
-            "sample_id": qid, "conversation": conversation,
-            "qa": [{"id": qid, "question": item["question"],
-                    "category": "abstention" if qid.endswith("_abs") else item["question_type"],
-                    "evidence": [] if qid.endswith("_abs") else item["answer_session_ids"]}],
-        })
+        result.append(
+            {
+                "sample_id": qid,
+                "conversation": conversation,
+                "qa": [
+                    {
+                        "id": qid,
+                        "question": item["question"],
+                        "category": "abstention" if qid.endswith("_abs") else item["question_type"],
+                        "answer": item.get("answer"),
+                        "question_date": item.get("question_date"),
+                        "evidence": []
+                        if qid.endswith("_abs")
+                        else [
+                            source_ids.get(sid, f"unmatched:{sid}")
+                            for sid in item["answer_session_ids"]
+                        ],
+                    }
+                ],
+            }
+        )
     return result

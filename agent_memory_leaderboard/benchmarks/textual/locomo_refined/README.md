@@ -19,10 +19,13 @@ without `--resume`. The launcher loads `var/local.env` or `AML_ENV_FILE` for
 endpoint authentication. Use `--adapter-url URL` for a different Add/Search
 base URL. Data and results are ignored by Git.
 
-Reports measure evidence recall at Top K 100, not answer accuracy or an official
-AML score. All history is ingested before search; labels never enter Add/Search.
+Default reports measure evidence recall at Top K 100. Optional `--mode answer-eval`
+adds local answer diagnostics; it is not an official AML score or native evaluator parity. All history is ingested before search; labels never enter Add/Search.
 Records remain isolated by run and sample for diagnosis and resume.
 
 Full dataset: `./benchmarks/textual/locomo_refined/run.sh --limit 10`.
 The downloaded release contains 10 histories and 1,382 questions. The text-only
 run skips 521 questions marked multimodal. Recall uses annotated dialogue IDs.
+
+See [local evaluation](../../EVALUATION.md) for model settings, score definitions,
+label-free source attribution, resume behavior and private-cache handling.
