@@ -209,7 +209,21 @@ def metrics(questions):
         return sum(values) / len(values) if values else None
 
     attributed = [r["source_attribution"] for r in records if "source_attribution" in r]
+    eligible = sum(
+        bool(r.get("evaluation_pending"))
+        or ("evaluation" in r and "skipped" not in r["evaluation"])
+        for r in records
+    )
+    scored = sum("local_judge_score" in e for e in evaluations)
     return {
+        "evaluation_eligible_questions": eligible,
+        "evaluation_coverage": scored / eligible if eligible else None,
+        "answer_failed_questions": sum(
+            r.get("evaluation_status") == "answer_failed" for r in records
+        ),
+        "judge_failed_questions": sum(
+            r.get("evaluation_status") == "judge_failed" for r in records
+        ),
         "evaluation_pending_questions": sum(bool(r.get("evaluation_pending")) for r in records),
         "scored_questions": sum("local_judge_score" in e for e in evaluations),
         "mean_local_judge_score": mean("local_judge_score"),
@@ -403,8 +417,14 @@ def summary():
                     "Scored / pending questions",
                     f"{totals['scored_questions']} / {totals['evaluation_pending_questions']}",
                 ),
+                ("Eligible questions", totals["evaluation_eligible_questions"]),
+                ("Scoring coverage (0–1)", rounded(totals["evaluation_coverage"])),
                 (
-                    "Local judge accuracy (0–1, higher is better)",
+                    "Answer failures / judge failures",
+                    f"{totals['answer_failed_questions']} / {totals['judge_failed_questions']}",
+                ),
+                (
+                    "Local judge accuracy (successful scores only; 0–1)",
                     rounded(totals["mean_local_judge_score"]),
                 ),
                 ("Token F1 (0–1, higher is better)", rounded(totals["mean_token_f1"])),
@@ -426,6 +446,13 @@ def summary():
                 f"{cell(row['reason'])} | {row['attempts']} | "
                 f"{row['retried_attempts']} | {rounded(row['elapsed_seconds'])} |"
             )
+    if final["mode"] == "answer-eval":
+        lines += [
+            "",
+            "Each mean uses questions with that metric; judge failures may still contribute "
+            "lexical scores. Interpret scores with coverage and failure counts. "
+            "A partial run is not a complete quality baseline.",
+        ]
     if prefixes := totals.get("evidence_recall_at_k"):
         lines += [
             "",

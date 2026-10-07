@@ -68,7 +68,21 @@ def summarize(report):
         values = [e[key] for e in evaluations if e.get(key) is not None]
         return sum(values) / len(values) if values else None
 
+    eligible = sum(
+        bool(q.get("evaluation_pending"))
+        or ("evaluation" in q and "skipped" not in q["evaluation"])
+        for q in questions
+    )
+    scored = sum("local_judge_score" in e for e in evaluations)
     return {
+        "evaluation_eligible_questions": eligible,
+        "evaluation_coverage": scored / eligible if eligible else None,
+        "answer_failed_questions": sum(
+            q.get("evaluation_status") == "answer_failed" for q in questions
+        ),
+        "judge_failed_questions": sum(
+            q.get("evaluation_status") == "judge_failed" for q in questions
+        ),
         "scored_questions": sum("local_judge_score" in e for e in evaluations),
         "evaluation_pending_questions": sum(bool(q.get("evaluation_pending")) for q in questions),
         "mean_local_judge_score": mean("local_judge_score"),
@@ -294,24 +308,55 @@ def run(args):
                         if not previous:
                             save(cache_path, {"contents": contents})
                             record["evaluation_pending"] = True
+                            record["evaluation_status"] = "pending"
                             report["questions"][qid] = record
                             save_question(args.output, qid, record)
                             persist()
                         report.update(stage="answer-eval", current=qid)
                         persist()
-                        evaluation = evaluator.evaluate(question, contents, cache_path)
+                        try:
+                            evaluation = evaluator.evaluate(question, contents, cache_path)
+                        except ModelError as exc:
+                            evaluation = exc.partial_result
+                            record.update(
+                                evaluation_status=f"{exc.phase}_failed",
+                                evaluation_pending=True,
+                                evaluation_error=exc.audit(),
+                            )
+                        else:
+                            record["evaluation_status"] = (
+                                "skipped" if "skipped" in evaluation else "completed"
+                            )
+                            record.pop("evaluation_pending", None)
+                            record.pop("evaluation_error", None)
                         ranked_ids, _ = manifest.audit(contents)
-                        evaluation["budget_evidence_recall"] = recall(
-                            question.get("evidence", []),
-                            ranked_ids[: evaluation["context_records"]],
-                        )
+                        if "context_records" in evaluation:
+                            evaluation["budget_evidence_recall"] = recall(
+                                question.get("evidence", []),
+                                ranked_ids[: evaluation["context_records"]],
+                            )
                         record["evaluation"] = evaluation
-                        record.pop("evaluation_pending", None)
+                        record["model_diagnostics"] = list(evaluator.model_attempts)
+                        if record.get("evaluation_error", {}).get("fatal"):
+                            report["questions"][qid] = record
+                            save_question(args.output, qid, record)
+                            persist()
+                            error = record["evaluation_error"]
+                            raise ModelError(
+                                error["phase"],
+                                error["reason_code"],
+                                error["http_status"],
+                                fatal=True,
+                            )
                     report["questions"][qid] = record
                     save_question(args.output, qid, record)
                     persist()
                 print(f"Finished {sample}", flush=True)
-        report["status"] = "completed"
+        report["status"] = (
+            "partial"
+            if any(q.get("evaluation_pending") for q in report["questions"].values())
+            else "completed"
+        )
     except (Exception, KeyboardInterrupt) as exc:
         report.update(
             status="interrupted" if isinstance(exc, KeyboardInterrupt) else "failed",
@@ -325,7 +370,7 @@ def run(args):
                 report["error"]["adapter_reason_code"] = code
         # Never persist arbitrary upstream bodies or exception text containing secrets.
     finally:
-        if report["status"] in {"completed", "failed", "interrupted"}:
+        if report["status"] in {"completed", "partial", "failed", "interrupted"}:
             apply_policy(report, datetime.now(UTC))
         report["summary"] = summarize(report)
         persist(final=True)

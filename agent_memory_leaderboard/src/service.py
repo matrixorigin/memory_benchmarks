@@ -3,7 +3,7 @@ import json
 
 from .config import Settings
 from .errors import AdapterError
-from .ingestion import message_parts, split_utf8  # noqa: F401 (compatibility export)
+from .ingestion import message_parts
 from .journal import Journal
 from .memoria import Memoria
 from .models import AddRequest, AddResponse, Evidence, SearchRequest, SearchResponse, text_content

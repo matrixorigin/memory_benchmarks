@@ -284,9 +284,6 @@ def run(args):
             successful_requests_per_second=len(successes) / elapsed,
             p50_seconds=latencies[math.ceil(len(latencies) * 0.5) - 1] if latencies else None,
             p95_seconds=latencies[math.ceil(len(latencies) * 0.95) - 1] if latencies else None,
-            long_request_verified=any(
-                r.get("ok") and r.get("seconds", 0) > 300 for r in report["records"]
-            ),
         )
         apply_policy(report, datetime.now(UTC))
         # Only one successful HTTP attempt over five minutes establishes this.

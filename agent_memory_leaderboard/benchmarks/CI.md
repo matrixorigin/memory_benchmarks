@@ -107,6 +107,15 @@ Summary 展示各切点的有标签覆盖题数、平均召回和全部证据命
 标记 skip。局部 judge 分数不宣称等价于数据集原生评分或 AML 分数。成功只表示流程
 完成，不设置未经干净基线验证的质量门槛。
 
+模型客户端对网络错误、429／5xx 最多尝试 4 次，指数退避为 0.5／1／2 秒；429 的
+数字 Retry-After 最多等待 30 秒。裁判支持完整代码块包裹的严格 JSON；无效判分、
+截断输出或重试耗尽只将该题标为 answer_failed／judge_failed，继续后续题目。
+401／403／404／405 等认证／地址错误仍尽早停止整轮。存在失败待评题时最终 status
+为 partial、退出码为 1，workflow 会显示失败，但 Summary 和 artifact 仍发布。
+Summary 单列 eligible／scored／pending、评分覆盖率及两类失败题数；覆盖率分母排除
+多模态和 missing-gold skip。各均值只使用有该指标的题目，judge_failed 的有效答案
+仍可能参与词法指标。不能将部分成功题的均值视为完整质量基线。
+
 ### Answer/Eval 的额外配置
 
 在 repository Settings → Secrets and variables → Actions 中配置：
@@ -158,6 +167,11 @@ Answer/Eval 在 Search 完成后先保存 pending 断点，回答已保存时裁
 答案。它需要原始 private cache 才能恢复 pending 问题。CI private cache 在 artifact 目录
 外，不上传模型正文；仅下载 artifact 无法恢复缺少该 cache 的 pending Answer/Eval。
 工作流仍不提供跨 run 自动续跑。
+
+回答／判分的重试、解析、上下文选择版本也进入 evaluation 契约，本次强化之前的
+answer-eval 断点需要使用原 runner 或新开运行，不能混用；retrieval 断点契约不受影响。
+离线 CI 安装 evaluation extra 并用 --no-sync 执行 Ruff／pytest，确保专项模型测试
+具有 tokenizer 依赖；测试使用确定性的本地编码与模拟 HTTP，不调用真实模型。
 
 ## 数据保留与运行成本
 

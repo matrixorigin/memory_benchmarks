@@ -77,6 +77,12 @@ runner version 2 只写入原始文本、角色、speaker 和来源日期；不�
 可唯一归属该 session。该诊断方法适用于当前保留原文的 Memoria 适配器；改写型记忆
 系统必须另行实现可靠的来源归属，不能直接把 hash 不匹配等同于检索失败。
 
+脱敏、改写或多消息合块实验的前置任务是稳定 memory ID 到 request／message／part
+及 source-unit 集合的私有映射，包含恢复与生命周期；合块允许多个来源。当前未实现
+该映射，不以 hash 方案支持所有粒度实验。诊断映射不得进入比赛 Search 返回或模型
+可见正文。LoCoMo 两名 human speaker 原始无 role 标注，均以 user 写入并保留姓名；
+不将任意一人标为 AI assistant，其他数据集显式角色按原值保留。
+
 新契约拒绝旧标签运行的 resume，使用新的 run UUID；旧结果可读，但不与新输入
 直接做算法优劣比较。gold 异常标签仍原样披露，不在这轮自动修正。
 
@@ -95,6 +101,20 @@ chat template/tokenizer。保留完整证据排名前缀，不跳过较大前置
 报告预算内来源召回和上游 token usage；实际输入超过预算时失败。实际 usage 在响应后
 取得，因此此检查不能避免所有超限调用成本。正式可比基线前仍需确认模型计数契约。
 
+上下文使用二分前缀与完整请求计数缓存，将编码次数降为 O(log N)；最终仍核验完整
+请求，不假定各记录 BPE token 可简单相加。选择、重试、解析版本写入 evaluation
+契约；旧 answer-eval 断点不跨版本混用，retrieval 契约不变。
+
+回答／裁判的网络错误与 429／5xx 最多尝试 4 次，退避 0.5／1／2 秒，429 数字
+Retry-After 上限 30 秒。严格 JSON 裁判支持完整代码块；无效返回、截断、预算超限
+或重试耗尽按题记录 answer_failed／judge_failed 并继续，认证／地址错误
+401／403／404／405 及存储／程序异常仍停止整轮。失败题保留 pending 可续跑，已保存
+回答的 judge 重试不重复生成答案，也不重复 Add／Search；成功题跳过。
+
+有待评失败题时最终 partial 且退出码 1。Summary 显示 scored／eligible／pending、
+评分覆盖率和两类失败数；覆盖率排除多模态、missing-gold skip。均值按各指标有效值
+统计，judge 失败仍可保留有效词法分数，不把模型故障计成错误答案，也不隐藏覆盖缺口。
+
 回答正文及检索上下文只存 private cache，用于 judge 失败后的续跑；artifact 只保存
 答案 hash、数值指标与安全诊断。CI private cache 在 artifact root 外，不上传。
 本地 pending 续跑需要保留该 cache，CI artifact 本身不包含完整 Answer/Eval 恢复材料。
@@ -106,6 +126,9 @@ chat template/tokenizer。保留完整证据排名前缀，不跳过较大前置
 不持久化 headers、原始 payload、响应正文或异常文字。Summary 展示中间尝试，便于
 定位恢复后的 503；不因记录了 503 就推断索引延迟或未知写入。重试集合、最多六次尝试
 和相同 Add request_id 的恢复语义保持原状。
+
+当前原因码仍依赖固定状态／文案，未知文案计 unclassified；新增机器可读 code 是
+独立兼容性任务，本次不改变官方错误响应契约。
 
 每题独立文件使用私有权限与原子替换，运行中 header 不再包含不断增长的 questions；
 最终报告合并一次，保留现有读取方式。resume／硬中断 Summary 合并完整题目文件；
@@ -127,6 +150,12 @@ chat template/tokenizer。保留完整证据排名前缀，不跳过较大前置
 验收状态：新代码尚未运行 benchmark 或容量验收。验收顺序为离线行为验证，再以
 新契约执行小集；未知写入的后端幂等契约、embedding 实际 token 上限、原生评分和
 正式 AML 验收继续按 Issue #1 推进。
+
+离线验证：完整 pytest 280 passed、1 warning（既有 Starlette 弃用警告），Ruff 与
+actionlint v1.7.7 通过；相较原有 179 项增加 101 项。专项用例覆盖六个新增核心模块
+的边界、模型失败隔离与续跑，以及 Summary 覆盖率；
+CI 安装锁定的 evaluation extra，以 --no-sync 保留测试依赖。使用模拟 HTTP 和本地
+确定性编码，不将离线通过当作真实 embedding／模型质量或 SLB 容量的证据。
 
 ## 源码导航
 

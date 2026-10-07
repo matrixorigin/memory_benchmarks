@@ -40,6 +40,18 @@ another memory system may need a separate auditable attribution implementation.
 A matching fragment establishes partial source visibility, not that every fact in
 the original message is available to Answer; answer correctness remains separate.
 
+Before experimenting with redaction, rewriting or multi-message storage chunks,
+replace this attribution method with a verified private mapping from stable
+backend memory IDs to wire request/message/part identities and their source-unit
+sets. A merged chunk may have several sources. Establish stable IDs and mapping
+lifecycle/recovery first; never embed those labels in model-visible content or
+extend the official Search response with diagnostic fields. This mapping is
+planned work, not implemented by the current manifest.
+
+LoCoMo's two human speakers have no assistant/user role annotation. Both use
+`user`, with original speaker names retained in content; this does not identify
+one speaker as an AI assistant. Explicit roles in other datasets are preserved.
+
 Runner contract version 2 uses new run-scoped users. Version 1 labeled runs
 remain readable but cannot be resumed by this runner: their ingestion contract
 differs. Do not compare the new quality baseline directly with labeled scores.
@@ -79,7 +91,7 @@ Use `--kind longmemeval` with its dataset path for LongMemEval-S. Gold comes
 from the downloaded dataset; no handwritten gold is required. Gold is used only
 by the scorer/judge, never by Add, Search or the answer model. LongMemEval's
 question date is supplied to the answer model when present. Missing gold is
-reported as an evaluation skip, not scored as a failure.
+reported as an evaluation skip without calling answer/judge models, not scored as a failure.
 
 ### Metrics and budget
 
@@ -106,6 +118,45 @@ after the provider call and does not guarantee avoidance of billing or over-limi
 requests. Confirm the actual model tokenizer/template before formal comparisons.
 Output length has a separate limit (default 1024); temperature is zero.
 
+Prefix selection uses binary search with memoized full-request token counts,
+reducing encoding passes from O(N) to O(log N) for N retrieved records. Each
+candidate includes all prompt fields and the selected result is checked as a
+complete input; this avoids assuming that BPE counts are additive per record.
+
+### Model failures and scoring coverage
+
+Answer and judge calls each allow at most four HTTP attempts. Transport errors,
+429 and 5xx use exponential backoff (0.5, 1, 2 seconds); numeric `Retry-After`
+on 429 is capped at 30 seconds per delay. Other HTTP errors are not retried.
+Safe per-question attempt diagnostics include phase, attempt, HTTP status or
+transport marker, duration and retry flag, without provider bodies or credentials.
+
+The judge accepts a strict JSON object containing only boolean `correct`, either
+bare or inside a complete Markdown code fence. Invalid JSON, invalid response
+envelopes, blank output, nonterminal completion reasons including `length`,
+exhausted transient failures and budget overflow fail the affected question.
+It remains `evaluation_pending` with `answer_failed` or `judge_failed`; later
+questions continue. Authentication/endpoint errors (401/403/404/405) stop the run
+early because they normally affect every question. Storage and programming
+errors also remain run failures.
+
+Any remaining pending question makes the final status `partial` with exit code 1.
+Summary reports eligible/scored/pending questions, scoring coverage and answer/
+judge failure counts. Coverage is successful judge scores divided by eligible
+evaluation questions; multimodal and missing-gold skips are excluded. Means use
+only available values: a valid answer can contribute Token F1/BLEU-1 even when
+its judge fails. Failures are neither silently dropped from coverage nor scored
+as incorrect answers. Interpret means with coverage; partial runs are not clean
+complete baselines.
+
+With the same contract and private cache, `--resume` skips completed questions,
+reuses Search results for pending ones and reuses a saved successful answer when
+retrying its judge. This avoids repeated Add/Search and answer calls. Interrupted
+calls whose result was not saved may still repeat. Retry, parser and context
+selection versions are recorded in the evaluation contract; pre-hardening
+Answer/Eval checkpoints do not match this contract and require a fresh run or
+their original runner. Retrieval-only checkpoint compatibility is unchanged.
+
 ### Checkpoints and privacy
 
 During execution, `run.json` is a small header. Each processed question is saved
@@ -120,6 +171,10 @@ headers, payload, arbitrary response text or exception message. The original
 six-attempt, route-specific retry policy and Add identity are unchanged. Summary
 shows intermediate retries as well as terminal failures; `unclassified` is not
 a diagnosis of the failure's cause.
+
+The current adapter reason recognizer is a conservative status/text allowlist;
+changed or unknown text becomes unclassified. A machine-readable adapter error
+code is separate contract work, rather than an implicit wire-schema change here.
 
 Answer/Eval keeps retrieved content and generated answers in a separate **private
 cache** to resume after model/judge failures. Locally the default is `.private/`
@@ -192,3 +247,18 @@ backend to hold a request or claim the SLB timeout has been validated.
 Probe users and writes are retained for inspection. The tool never deletes data,
 resets journals, deploys services or runs automatically on PRs. Coordinate actual
 load and retention before using `--execute` against shared dev infrastructure.
+
+## Offline regression checks
+
+```sh
+uv sync --locked --extra evaluation
+uv run --no-sync pytest -q
+uv run --no-sync ruff check src tests benchmarks scripts/benchmark_ci.py
+```
+
+Dedicated tests cover evidence attribution/ambiguity and UTF-8 parts, ranked
+budget selection, malformed/fenced verdicts, bounded model retries, partial-run
+continuation and resume, checkpoint recovery, torn request logs, lexical metrics,
+Summary coverage and probe safety/long-request accounting. Model and adapter
+responses use in-process mocks and deterministic local tokenization; these tests
+do not establish a live embedding/model baseline or actual SLB capacity.
