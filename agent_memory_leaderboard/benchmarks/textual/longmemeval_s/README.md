@@ -7,7 +7,17 @@ The shared driver calls the configured Memoria-backed Add/Search endpoints.
 ```sh
 # From the project root; download public data once:
 mkdir -p benchmarks/textual/longmemeval_s/data
-curl -fL 'https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json' -o benchmarks/textual/longmemeval_s/data/longmemeval_s_cleaned.json
+curl -fL 'https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/98d7416c24c778c2fee6e6f3006e7a073259d48f/longmemeval_s_cleaned.json' -o benchmarks/textual/longmemeval_s/data/longmemeval_s_cleaned.json
+# Verify against the same size/hash manifest used by Actions:
+python3 - <<'PY'
+import hashlib, json
+from pathlib import Path
+source = json.loads(Path('benchmarks/ci-datasets.json').read_text())['longmemeval']
+path = Path('benchmarks/textual/longmemeval_s/data/longmemeval_s_cleaned.json')
+if path.stat().st_size != source['bytes'] or hashlib.file_digest(path.open('rb'), 'sha256').hexdigest() != source['sha256']:
+    raise SystemExit('Dataset does not match the pinned Actions input')
+print('Pinned dataset verified')
+PY
 # Pilot on one complete history:
 ./benchmarks/textual/longmemeval_s/run.sh --limit 1
 # Resume using exactly the same selection:

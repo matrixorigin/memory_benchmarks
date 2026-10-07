@@ -38,7 +38,7 @@ def time_cases(anchor):
 
 
 def safe_explain(data):
-    allowed_paths = {"vector", "fulltext", "graph", "graph+vector", "none"}
+    allowed_paths = {"vector", "hybrid", "fulltext", "graph", "graph+vector", "none"}
     result = {}
     if data.get("path") in allowed_paths:
         result["path"] = data["path"]

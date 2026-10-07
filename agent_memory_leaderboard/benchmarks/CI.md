@@ -59,6 +59,9 @@ workflow 与 CD 使用同一并发组
 
 ## Summary 与完整报告
 
+已完成运行的安全聚合指标与解释见[固定基线](baselines/README.md)。完整断点仍在
+对应 Actions artifact；Git 中的聚合报告不包含数据正文、回答或可恢复的 private cache。
+
 Summary 包含状态、评测进程耗时、写入分块数、已处理／已查询／跳过的问题数、空结果、
 有证据标签的问题数、召回率、Search P50／P95、按数据集 category 分组的结果及版本。
 准备或执行失败时仍尝试生成 Summary 和 artifact，包含已完成部分及非秘密错误类型／HTTP

@@ -16,6 +16,15 @@ Use a fixed answer model, judge model and dataset for comparisons; choosing
 Qwen3-14B alone does not make this local judge equivalent to the refined judge.
 Native evaluation and official AML validation remain separate acceptance work.
 
+"Local" means a self-run evaluation, including GitHub Actions; it does not
+require a locally deployed Memoria service. The workflow and CLI share this
+evaluator. AML's public documentation describes a platform-controlled Answer/Eval
+flow, but the complete official judge prompts and a reproducible implementation
+were not found in the documentation checked on 2026-10-07. The prompts in
+`src/evaluation.py` are maintained by this project, not copied from AML.
+See the [official documentation](https://agentmemories.ai/zh-cn/docs) and
+[competition readiness plan](../docs/competition-plan.md#正式参评前的工作).
+
 ## Label-free ingestion and evidence attribution
 
 Only the original message text, speaker, role and source date enter Add. No

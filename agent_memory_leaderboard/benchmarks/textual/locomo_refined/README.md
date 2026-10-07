@@ -7,7 +7,17 @@ The shared driver calls the configured Memoria-backed Add/Search endpoints.
 ```sh
 # From the project root; download public data once:
 mkdir -p benchmarks/textual/locomo_refined/data
-curl -fL 'https://raw.githubusercontent.com/mem-eval-suite/LoCoMo_refined/main/data/raw/locomo_refined.json' -o benchmarks/textual/locomo_refined/data/locomo_refined.json
+curl -fL 'https://raw.githubusercontent.com/mem-eval-suite/LoCoMo_refined/887091190789e8d6760e70b9edd696539923dc4f/data/raw/locomo_refined.json' -o benchmarks/textual/locomo_refined/data/locomo_refined.json
+# Verify against the same size/hash manifest used by Actions:
+python3 - <<'PY'
+import hashlib, json
+from pathlib import Path
+source = json.loads(Path('benchmarks/ci-datasets.json').read_text())['locomo']
+path = Path('benchmarks/textual/locomo_refined/data/locomo_refined.json')
+if path.stat().st_size != source['bytes'] or hashlib.file_digest(path.open('rb'), 'sha256').hexdigest() != source['sha256']:
+    raise SystemExit('Dataset does not match the pinned Actions input')
+print('Pinned dataset verified')
+PY
 # Pilot on one complete history:
 ./benchmarks/textual/locomo_refined/run.sh --limit 1
 # Resume using exactly the same selection:

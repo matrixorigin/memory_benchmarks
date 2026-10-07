@@ -85,6 +85,16 @@ def test_time_boundaries_and_explain_allowlist():
     }
 
 
+@pytest.mark.parametrize("path", ["vector", "hybrid", "fulltext", "graph", "graph+vector", "none"])
+def test_explain_preserves_known_memoria_paths_without_content(path):
+    assert probes.safe_explain({"path": path, "content": "PRIVATE"}) == {"path": path}
+
+
+@pytest.mark.parametrize("path", ["PRIVATE unknown path", None])
+def test_explain_omits_unknown_paths(path):
+    assert probes.safe_explain({"path": path, "content": "PRIVATE"}) == {}
+
+
 @pytest.fixture
 def clock(monkeypatch):
     class Clock:
