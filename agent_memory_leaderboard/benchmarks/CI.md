@@ -136,6 +136,25 @@ Summary 单列 eligible／scored／pending、评分覆盖率及两类失败题�
 缺失时不写入记忆。准备步骤不读取模型凭据。工作流安装锁定的 evaluation extra；
 适配器镜像不需要此 extra，也不需要重新部署。
 
+当前开发配置（2026-10-07）：回答和裁判的 MODEL 均为 `qwen-plus`，两个 BASE_URL
+均为 `https://dashscope.aliyuncs.com/compatible-mode/v1`，分别配置上述两个 API_KEY
+Secrets，复用已有百炼凭据。GitHub 配置已保存并回读确认；尚未验证本次凭据的模型
+调用或执行新契约基准。密钥不进入仓库或日志。
+
+运行 `AML benchmark` 时选择 `main`、`dataset=locomo`、`mode=answer-eval`、
+`histories=1`、`top_k=100`，`runtime_label` 可留空。模型设置在 benchmark 进程中生效，
+不需要重新构建或部署 Memoria／适配器。qwen-plus 为提供商可更新别名，跨日期比较
+不能假定底层权重相同；长期可比实验需选择并记录可用快照版本。回答与裁判同模型的
+分数用于本地迭代，不能作为独立裁判或官方评分等价性的证明。
+
+正式 AML 的 Answer/Eval 由平台固定，我们的配置不会替换平台模型。官方 Full checklist
+写 Open-source Methods 的 Add 期望使用 `gpt-4o-mini`，商业产品无 Add/Search 模型限制；
+FAQ 仍写学术榜 embedding 为 `text-embedding-v4`、LLM 组件为 `gpt-4o-mini`、reranker
+不限制。两套组别名称的对应及纯存储 Add／上海 bge-m3 资格需向官方确认；不能用本地
+qwen-plus 配置推断正式参评合规。
+依据：[AML 文档](https://agentmemories.ai/zh-cn/docs)、
+[赛事 FAQ](https://agentmemoryleaderboard.ai/competition/)。
+
 全部输入（指令、角色、问题、选项／问题日期、证据）按固定 `o200k_base` 编码加
 256 token 余量进行本地预算计数，上限 117760；保留完整记录的排名前缀。它不是所有
 模型或 AML 的准确 tokenizer／chat template。报告记录模型实际 prompt usage（如有）；
