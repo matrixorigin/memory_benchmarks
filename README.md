@@ -1,6 +1,6 @@
 # Memory Benchmarks
 
-[![AML offline CI](https://github.com/matrixorigin/memory_benchmarks/actions/workflows/aml-ci.yml/badge.svg?branch=main)](https://github.com/matrixorigin/memory_benchmarks/actions/workflows/aml-ci.yml)
+[![CI - Lint, Tests & Adapter Build](https://github.com/matrixorigin/memory_benchmarks/actions/workflows/aml-ci.yml/badge.svg?branch=main)](https://github.com/matrixorigin/memory_benchmarks/actions/workflows/aml-ci.yml)
 
 Public memory benchmarks, an Agent Memory Leaderboard (AML) Add/Search adapter,
 and a dedicated dev deployment for [Memoria](https://github.com/matrixorigin/memoria).
@@ -266,7 +266,7 @@ database bootstrap, selective updates, DNS/certificates, and acceptance checks.
 
 | Workflow | Trigger | Result |
 |---|---|---|
-| [AML offline CI](.github/workflows/aml-ci.yml) | Matching PRs/pushes or manual | Lint, tests, workflow/chart validation, adapter image build and Pulumi checks; no Memoria build, live benchmark or deployment |
+| [CI - Lint, Tests & Adapter Build](.github/workflows/aml-ci.yml) | Matching PRs/pushes or manual | Lint, tests, workflow/chart validation, adapter image build and Pulumi checks; no Memoria build, live benchmark or deployment |
 | [AML Aliyun dev deployment](.github/workflows/aml-dev-deploy.yml) | Manual; main push when explicitly enabled | Publish images and preview/update the dev stack |
 | [AML benchmark](.github/workflows/aml-benchmark.yml) | Manual, main only | Call deployed Add/Search and publish retrieval reports |
 

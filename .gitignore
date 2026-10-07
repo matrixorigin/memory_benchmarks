@@ -159,6 +159,7 @@ deploy/pulumi/Pulumi.new-dev.yaml
 .deploy-venv/
 .memoria-source/
 deploy/memoria-build.json
+deploy/pulumi/.bin/
 deploy/.retained-values.json
 .envrc
 .venv

@@ -2,6 +2,7 @@
 
 import argparse
 import base64
+import hashlib
 import hmac
 import json
 import os
@@ -188,20 +189,37 @@ def reuse(path: Path) -> None:
     print("Retained the unselected application's deployed image and chart configuration")
 
 
+def snapshot_digest(snapshot: dict) -> str:
+    payload = json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def fingerprint(path: Path) -> None:
+    snapshot = json.loads(path.read_text()) if target() != "both" else {}
+    append_values("GITHUB_OUTPUT", {"retained_snapshot_sha256": snapshot_digest(snapshot)})
+    print("Recorded a digest of the retained configuration; values remain on this runner")
+
+
 def recheck(path: Path) -> None:
-    if target() != "both" and json.loads(path.read_text()) != capture():
+    snapshot = json.loads(path.read_text()) if target() != "both" else {}
+    expected = os.getenv("AML_RETAINED_SNAPSHOT_SHA256")
+    if expected is not None and not hmac.compare_digest(snapshot_digest(snapshot), expected):
+        raise ValueError("The retained configuration changed between jobs; start a new run")
+    if target() != "both" and snapshot != capture():
         raise ValueError("The deployed configuration changed during the build; start a new run")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=["plan", "reuse", "recheck"])
+    parser.add_argument("operation", choices=["plan", "reuse", "fingerprint", "recheck"])
     parser.add_argument("--snapshot", type=Path, default=Path("deploy/.retained-values.json"))
     args = parser.parse_args()
     if args.operation == "plan":
         plan()
     elif args.operation == "reuse":
         reuse(args.snapshot)
+    elif args.operation == "fingerprint":
+        fingerprint(args.snapshot)
     else:
         recheck(args.snapshot)
 
