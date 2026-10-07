@@ -45,8 +45,8 @@ CI/CD、Memoria 部署模板和自动证书配置已合入 `memory_benchmarks` �
 
 | 部分 | 代码／配置状态 | 已执行的工作 | 待验证／待完成 |
 |---|---|---|---|
-| 离线 CI | 单个 `checks` job 执行 Ruff、pytest、Helm lint／template、适配器镜像构建、Go Pulumi 检查；八个健康探针用例；不构建 Memoria | 已有 CI 运行通过，pytest 为 154 passed、1 warning；Helm 3.17.4 两组检查及适配器镜像构建通过 | 当前提交以 PR checks 为准；CI 不推送镜像或部署 |
-| benchmark workflow | 手动选择 LoCoMo／LongMemEval-S、固定数据校验、Summary 与 artifact；Recall@K 及逐题审计 | 修复后 LoCoMo 3 个历史的 101 个 Add／242 次 Search、LongMemEval-S 首个历史的 69 个 Add／1 次 Search 完整通过 | 本地代码已补标签隔离、可选 Answer/Eval、预算内召回和重试观测；新契约尚未运行验收，无正式质量分数 |
+| 离线 CI | 单个 `checks` job 执行 Ruff、pytest、Helm lint／template、适配器镜像构建、Go Pulumi 检查；八个健康探针用例；不构建 Memoria | PR #9 的 CI 通过，pytest 为 280 passed、1 warning；Helm 检查及适配器镜像构建通过 | 当前提交以 PR checks 为准；CI 不推送镜像或部署 |
+| benchmark workflow | 手动选择 LoCoMo／LongMemEval-S、固定数据校验、Answer/Eval、Summary 与 artifact；Recall@K 及逐题审计 | 新契约 LoCoMo 首个完整历史：28 Add／87 Search／87 判分全部完成；自建 judge 56.32%，Recall@100 80.23% | 扩大无标签基线、人工抽查裁判与失败样本；无正式 AML 分数 |
 | dev CD | main 手动 preview／deploy、冻结检查、单项更新选择；独立 build／deploy runner；自动部署默认关闭 | 首次完整 CD 及固定镜像单项更新成功，适配器 Pod 保留 | 新版源码模式端到端发布仍待验收 |
 | Memoria 部署 | 源码／现成镜像模式、分支选择、版本记录及数据库／embedding 配置 | main 源码产物以固定 digest 更新成功，新 Pod Ready，单项更新保留适配器 | 源码构建与部署的 runner 磁盘预算、未知写入恢复仍待验收 |
 | Add/Search 部署 | Deployment、Service、journal PVC 和 `/ready` | PVC Bound；公网真实 Add/Search 七项最小联调通过 | 持久性、未知写入恢复及容量仍待验收 |
@@ -62,8 +62,8 @@ CI/CD、Memoria 部署模板和自动证书配置已合入 `memory_benchmarks` �
 ## 本地质量闭环与诊断设计
 
 实现与操作说明统一见[评测与诊断](../benchmarks/EVALUATION.md)；Actions 配置见
-[benchmark workflow](../benchmarks/CI.md)。以下能力已在本地开发分支实现，尚未建立
-新契约下的真实质量基线，不能以旧运行结果作为这些代码的验收证据。
+[benchmark workflow](../benchmarks/CI.md)。以下能力已合入 `origin/main`（PR #9），首个
+无标签契约的真实端到端小集已完成，见下文；不能以旧运行结果作为新契约的验收证据。
 
 ### 输入隔离与来源归属
 
@@ -147,15 +147,93 @@ Retry-After 上限 30 秒。严格 JSON 裁判支持完整代码块；无效返�
 需要配合基础设施指标另行测量。只有实际一次成功 HTTP attempt 超过五分钟，才标记
 长请求链路验证通过；多次短重试累计超时不计通过。
 
-验收状态：新代码尚未运行 benchmark 或容量验收。验收顺序为离线行为验证，再以
-新契约执行小集；未知写入的后端幂等契约、embedding 实际 token 上限、原生评分和
-正式 AML 验收继续按 Issue #1 推进。
+验收状态：新契约已完成 LoCoMo 首个完整历史、四组时间探针和 20 次低负载 Search。
+这不代表最大容量、未知写入恢复、长请求或正式 AML 验收通过。后端幂等契约、
+embedding 实际 token 上限、原生评分和正式验收继续按 Issue #1 推进。
 
 离线验证：完整 pytest 280 passed、1 warning（既有 Starlette 弃用警告），Ruff 与
 actionlint v1.7.7 通过；相较原有 179 项增加 101 项。专项用例覆盖六个新增核心模块
 的边界、模型失败隔离与续跑，以及 Summary 覆盖率；
 CI 安装锁定的 evaluation extra，以 --no-sync 保留测试依赖。使用模拟 HTTP 和本地
 确定性编码，不将离线通过当作真实 embedding／模型质量或 SLB 容量的证据。
+
+### 干净端到端基线（2026-10-07）
+
+[Actions run 37594716119](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37594716119)
+在 `main@003dda1` 执行 `locomo / answer-eval / histories=1 / top_k=100`，完整历史为
+`conv-26`。数据 revision／SHA256 固定于 `ci-datasets.json`；输入不含诊断来源标签。
+Memoria 为 `81c5cc6`，适配器为 `3048f6b`，实际 digest 见官方接入材料；评测前后
+Pod UID 与镜像保持一致、Ready 且重启次数为 0。回答／裁判均使用 `qwen-plus`，
+temperature=0，prompt `memory-answer-v1`，scorer `local-dataset-judge-v1`。
+该 alias 可变化，同模型裁判也可能有偏好，不能当作不可变的长期基准。
+
+| 指标 | 结果与分母 |
+|---|---|
+| 执行状态／耗时 | completed，919.14 秒，约 15.32 分钟；不含准备和安装 |
+| Add／Search | 28／28 批次、87／87 道文本题成功；51 道多模态题跳过 |
+| 判分覆盖率／模型失败 | 87／87，100%；answer_failed=0，judge_failed=0，pending=0 |
+| 自建 judge 通过率 | 49／87，56.32%；不是 AML 或原生 evaluator 分数 |
+| Token F1／BLEU-1 | 0.2674／0.1773；项目词法实现，范围 0–1、越大越好 |
+| Recall@100／全部证据命中率 | 80.23%／79.07%；86 道有正证据标签的问题 |
+| Recall@1／5／10／20／50 | 37.21%／57.27%／64.83%／67.15%／74.13% |
+| 预算内召回 | 80.23%；所有题目均保留 100 条记录，没有因预算删去证据 |
+| 上下文 token | 本地估算 4881–6612；上游实际 prompt 为 4917–6700，均低于 117760 |
+| 来源匹配 | 8700／8700 条返回记录匹配；ambiguous=0、unmapped=0 |
+| 空结果／gold 标注异常 | 0／1；`conv-26#q0028` 的原始合写证据标签保留计分 |
+| Search P50／P95 | 0.93／2.95 秒 |
+
+28 个成功 Add 之前共发生 5 次 HTTP 503，涉及 4 个逻辑批次，全部经原样重试恢复。
+安全诊断均为 `write_not_readable`，对应写入返回后 GET 回查未找到记录；不是
+`write_outcome_unknown` 或 `write_not_searchable`。这已缩小排查范围，但不能据此
+确认 embedding 故障、数据库一致性根因或需要改变重试策略。
+
+失败诊断以“标注证据是否进入预算”分组：68 道题全部标注证据可见，其中 judge
+通过 43、未通过 25；18 道题缺部分或全部标注证据，其中通过 5、未通过 13；
+另 1 道无正证据标签的题通过。优先人工核查那 25 道题，区分回答错误、缺少标注
+之外的衔接上下文、时间表达／列表要求及裁判误判。标注来源出现不保证事实足够，
+也不能将其全部归因于 LLM 或裁判；CI artifact 未保存原始回答，不能宣称已完成人工复核。
+需要审查实际生成文本时，在受控环境保留 private cache，或明确标记为复现实验。
+
+此结果建立一个历史的项目内部基线，不能证明总体比赛质量，也不能与旧标签输入
+直接比较算法提升。尚无根据全局修改 Memoria 算法或开启 reranker。
+聚合指标、配置、失败分组题目 ID 见
+[固定基线报告](../benchmarks/baselines/2026-10-07-locomo-qwen-plus.json)；原始报告与
+断点在该 Actions artifact，按既有 30 天保留策略管理，不提交数据正文、gold 或回答。
+
+### 时间与低负载探针验收（2026-10-07）
+
+LoCoMo 结束后串行执行 `src.probes`，使用全新用户及合成文本。时间探针的旧、近期、
+新旧混合和阈值两侧四组共 4 Add／12 Search，16 次请求全部成功。其独立 Explain
+复查只读取对应 owner；观察结果如下：
+
+| 场景 | 公网 Search 的来源命中 | 独立 Explain 复查 |
+|---|---|---|
+| 旧记忆单独存在 | 3／3 次命中旧记忆 | 3／3 为 fulltext，混合路径无结果后回退 |
+| 近期记忆单独存在 | 3／3 次命中近期记忆 | 未额外 Explain |
+| 新旧混合 | 3／3 只返回近期，含一次旧文本精确查询 | 3／3 为 hybrid，旧记忆仍 active；observed_at 为 2022 年、created_at 为本次写入时间 |
+| T1 假设阈值两侧 | 3／3 只命中较新一侧 | 3／3 为 hybrid，两个原始记录仍 active |
+
+源码按部署的 `81c5cc6` 核对：混合检索按 observed_at 计算时间与置信度，在
+`MIN_CONF=0.05` 下过滤；混合结果非空时不会进入后续全文回退。该组合与复查结果
+一致，确认当前配置存在历史来源在新旧混合时不可见的适配风险。独立 Explain 是另一次
+读取，不声称它必然复现此前每个公网请求的路径，也不据此认定通用 Memoria 衰减设计错误。
+LoCoMo runner 的日期仅进入正文，没有发送 AML timestamp；这项风险不能用于解释
+本轮 LoCoMo 的 56.32% judge 分数。
+
+下一项时间实验应在适配边界比较“来源时间”与“置信度年龄”的解耦，保持原始时间
+进入证据和 metadata、用于日期理解与时序推理，不丢弃或改造原始时间。冻结其他
+条件后重复上述回归；在实验通过前不全局关闭 Memoria 衰减，也不把该风险标为已修复。
+
+低负载 Search 探针配置为 concurrency=2、逻辑 QPS 上限 1、20 次 Search，加 1 次
+seed Add；全部成功、无重试，Search P50／P95 为 2.38／3.84 秒，总耗时 32.32 秒。
+该 QPS 是调度上限，实际完成吞吐约 0.62 Search／秒（含 seed 时间），不是最大容量。
+没有单次成功请求超过 5 分钟，SLB 长请求验收仍待完成。合成记忆保留在隔离用户下
+供复查，私有清理清单位于 ignored probe 报告，不以本次成功声称完成物理清理。
+
+诊断工具已修复 `safe_explain` 遗漏合法 `hybrid` 路径的问题；仅补安全输出白名单，
+不修改检索、时间或 Add/Search wire 契约。新增 8 个路径白名单回归用例，完整 pytest
+288 passed、1 个既有 warning，Ruff 通过。安全聚合结果见
+[探针报告](../benchmarks/baselines/2026-10-07-dev-probes.json)。
 
 ## 源码导航
 
@@ -208,7 +286,7 @@ Memoria 默认从源码 `main` 分支构建，由本项目 CD 部署，也可指
 
 ## 当前工程与职责
 
-同事原始审查版本为 `b037c42`；当前核实代码为 `origin/main@478ad09`，运行结果分别
+同事原始审查版本为 `b037c42`；当前评测代码为 `origin/main@003dda1`，运行结果分别
 关联各自的 benchmark commit 和实际后端镜像。完整逐项结论见
 [Issue #1 当前核实结论](review-issue-1.md)，不将旧版问题列表直接当作当前任务状态。
 
@@ -216,7 +294,7 @@ Memoria 默认从源码 `main` 分支构建，由本项目 CD 部署，也可指
 |---|---|
 | `memory_benchmarks/agent_memory_leaderboard` | 已有 FastAPI Add/Search、SQLite 幂等 journal、隐私保护、断点执行、多数据集解析和检索诊断 |
 | Memoria | 作为记忆存储与检索后端；当前适配器调用普通 `/v1/memories` 接口 |
-| 本地质量评测 | 当前仅有证据召回诊断；Answer/Eval、预算内证据及可信质量基线待建立 |
+| 自建质量评测 | 已实现 Answer/Eval、Recall@K、预算内证据、模型失败隔离及评分覆盖率；真实基线与官方评分分别验收 |
 | AML 平台 | 调度参评接口并统一回答、评分；本次没有运行官方评测 |
 
 以现有 FastAPI 适配器为后续工作基础。协议适配、数据集执行、评测和报告在本项目维护；只有新项目确认需要后端能力或修复时，才安排相应 Memoria 修改。当前并未切换到此前 Memoria `/aml/*` 路由，也未迁入其来源策略、原子幂等或邻接补全。
@@ -227,7 +305,7 @@ Memoria 默认从源码 `main` 分支构建，由本项目 CD 部署，也可指
 
 1. **接收实际运行材料**：确认同事使用的 Memoria commit／镜像、模型与配置、失败状态及完整性汇总。私人结果被 gitignore 排除，clone 缺少结果不能证明从未运行。
 2. **保证输入与写入可信**：隔离模型可见的诊断 ID／答案来源标签；核查来源时间触发的过滤；处理不确定且未提交写入的恢复，以及 token／字节边界。需逐项确认实现位置与验收条件，不通过等待后盲目重发保证幂等。
-3. **建立本项目质量闭环**：增加 Answer/Eval、Recall@K、预算内证据、失败与时延汇总；在真实 Memoria 和 embedding 环境建立固定小集基线。按数据集选择适用评分规则；模型可见输入不含 gold 或诊断标签。
+3. **建立本项目质量闭环**：Answer/Eval、Recall@K、预算内证据、失败与时延汇总已合入；在真实 Memoria 和 embedding 环境建立固定小集基线。按数据集选择适用评分规则；模型可见输入不含 gold 或诊断标签。
 4. **按失败原因做实验**：一次改变一个因素，对照粒度／邻接／排序，再决定 options、rerank 或 query rewriting。检索到更多内容、填满预算或具备更多模块均不能单独作为质量提升证据。
 5. **完成容量与正式验收**：测量写入吞吐，核查批量接口语义与重试，验证部署、认证、数据清理和公网可达性；核对组别与冻结契约，再安排官方 Smoke／Full。
 
@@ -373,7 +451,8 @@ Memoria 是独立来源仓库，日常适配器、评测或文档变更不重复
 允许 1–10 个历史和 Top K 1–100；不自动随 PR、push、部署或定时任务运行。
 工作流仅接受本仓库 main，固定调用当前 dev 公网入口；唯一业务凭据为已配置的
 `AML_ADAPTER_API_KEY`，映射为 runner 的 `ADAPTER_API_KEY`，仅在执行步骤注入。
-不重新部署应用，不要求 SQL、master key、kubeconfig、Pulumi 或 LLM key。
+不重新部署应用，不要求 SQL、master key、kubeconfig 或 Pulumi。默认 retrieval 不需要
+LLM key；选择 answer-eval 时另外提供回答／裁判模型的配置与凭据。
 
 两套来源固定 revision、原始文件大小和 SHA256，先下载／验证再调用服务。
 `benchmarks/ci-datasets.json` 维护可扩展来源注册；新数据集必须补齐数据准备与指标语义，
@@ -387,7 +466,8 @@ benchmark commit、数据版本、选择范围和 Top K。
 Summary 展示执行状态、完整／部分进度、耗时、证据召回率、全部证据命中率、空结果、
 平均返回证据数、Search P50／P95、逐历史和原始 category 分组；未知指标显示 N/A，有证据标签的问题才进入召回率
 分母。LoCoMo 使用消息证据，LongMemEval-S 使用 session 证据；不跨数据集直接排名，
-category 也不映射为 AML 七个能力维度。当前不生成答案、不提供 Token F1／BLEU-1 或官方
+category 也不映射为 AML 七个能力维度。retrieval 不生成答案；answer-eval 为 LoCoMo
+提供 Token F1／BLEU-1，并为两套数据提供自建 judge 分数与评分覆盖率。均不作为官方
 AML 分数，未设置无基线支持的质量门槛。
 
 报告生成和上传在失败时也执行，artifact 30 天保存 checkpoint、版本及证据 ID／hash，
@@ -608,8 +688,8 @@ Memoria 衰减逻辑，也不宣称覆盖所有检索模式／配置。
 
 后续按以下顺序推进，不为每套数据集另建 workflow：
 
-质量评分和算法实验前，先移出模型可见的诊断／答案来源 ID，保留外部审计映射；
-现有带标签的结果用于运行诊断，不作为正式质量基线。
+模型可见的诊断／答案来源 ID 已移出，保留外部审计映射；旧带标签的结果用于运行
+诊断，不作为正式质量基线。新契约的真实质量结果与后续顺序见“正式参评前的工作”。
 
 1. **继续验证写入可靠性与可恢复性**：PR #277／#278 已在固定小集完成线上回归；
    补充安全的中间重试原因与次数观测，定位可恢复 503，并在扩大范围时继续验证
@@ -626,7 +706,7 @@ Memoria 衰减逻辑，也不宣称覆盖所有检索模式／配置。
 4. **扩大已接入的 LongMemEval-S**：首个历史已完整通过；同一 workflow 选择
    `longmemeval`，后续扩至 `histories=10`。每个历史只有一道问题，1 或 10 个历史主要用于
    初步验证，不能代表完整 500 题质量或覆盖全部能力；正式基线需后续扩展样本范围。
-5. **补齐质量评分**：接入 Answer/Eval，固定回答模型、提示词、证据预算和裁判规则，
+5. **质量评分验收**：Answer/Eval 已接入，固定回答模型、提示词、证据预算和裁判规则，
    使用原数据已有 gold answer／evidence 评分，保持 gold 不进入 Add/Search。
    同时比较 Recall@K、预算内证据、答案质量和时延；不把证据召回率当作答案分数。
 6. **补有针对性的回归样本**：多用户隔离、幂等重试、时间顺序／事实更新、跨会话聚合及
@@ -717,7 +797,73 @@ API 地址、集群 UID 和租户标识属于环境信息，不等同于密码�
 
 ### 正式参评前的工作
 
-优先完成输入与来源时间、未知写入恢复、token／字节边界等已确认问题，并建立本项目自己的 Answer/Eval 和固定小集质量基线。在阿里云 dev 独立应用部署后，测量共享资源上的容量，确认模型和组别契约，验收 HTTPS、认证、用户隔离、时延、重启／重试及清理。发布流程不自动启动基准或官方 Smoke／Full。
+先建立无来源标签泄漏的固定小集 Answer/Eval 基线，再按失败样本决定检索、排序、
+证据上下文或评分侧的优化。自建 Answer/Eval 使用项目自己维护的提示词和 rubric，
+并未取得 AML 完整判分提示词，不承诺复现官方或数据集原生评分器。相同流程结构
+不能保证分数等价；固定模型、数据、预算及提示词版本后用于项目内部比较。
+
+实施顺序为：LoCoMo 首个完整历史的端到端基线；补 LongMemEval-S 完整历史；扩大
+LoCoMo 历史覆盖与不同类别诊断；再按预算接入 BEAM 等现有文本解析器。所有实验
+串行进行，复用同事的下载／转换脚本和共享 runner，不重复开发已有入口。
+遇到未知写入、embedding 格式或内容策略阻塞时，先定位和修复可靠性问题，再比较质量。
+
+正式 Full 前仍须确认模型和组别契约，并验收容量、重启／重试恢复、公网长请求和
+物理清理。发布流程不自动启动基准或官方 Smoke／Full。
+
+#### 数据准备与复现
+
+完整公开数据在本地或 Actions runner 下载，继续排除 Git；提交下载／转换代码、
+固定来源 revision、原始文件字节数、SHA256、许可证说明和样本选择规则。
+LoCoMo／LongMemEval 已由 `benchmarks/ci-datasets.json` 与准备步骤实现固定下载和校验；
+新增数据优先接入现有 `download.py`／`prepare.py`，明确转换版本及转换后的校验值。
+不依赖同事电脑中的 ignored 文件作为可复现交付。少量人工合成回归样例和来源 ID
+选择清单可以提交；评测正文、gold、私有缓存和 key 不进入结果文档。
+
+当前无需引入 OSS／S3 或 Git LFS。若上游可用性成为实际阻塞，再按许可证建立受控
+镜像，仍按校验值识别数据。数据可下载不等于已完成 Add/Search 或原生作答判分。
+
+#### 官方接入材料与 Smoke
+
+以下是申请准备材料，不表示已向平台提交或获得正式资格。2026-10-07 只读核对
+两个 Deployment Ready、Pod 无重启、证书 Ready，公网 `/ready` 返回 200。
+现有自建真实 Add/Search 结果可作为技术说明；`/ready` 不能代替官方 Smoke。
+
+| 申请／绑定字段 | 已准备的内容／待完成项 |
+|---|---|
+| 系统／赛道 | Memoria，Textual Memory；参赛组别由负责人按官方模型要求确认 |
+| 方法与代码 | [Memoria](https://github.com/matrixorigin/memoria) 与 [适配／评测仓库](https://github.com/matrixorigin/memory_benchmarks)；基于同事现有适配器，来源及改动据最终冻结代码填写 |
+| Add URL | `https://aml.cn-dev.matrixone.tech/add` |
+| Search URL | `https://aml.cn-dev.matrixone.tech/search` |
+| 健康检查 | `https://aml.cn-dev.matrixone.tech/health`；运维就绪检查为 `/ready` |
+| 鉴权 | `Authorization: Bearer <Memory System Key>`；使用已有 `AML_ADAPTER_API_KEY`，通过官方凭据字段提交，不放入公开说明 |
+| Memoria 版本 | `81c5cc6d5e86a34072ecbc1bb41979b06364e7c7`；部署 digest `sha256:16d7eefa847749ffd4d61569419110a52b8de8fb78a283a8cd57df004d04ea8b` |
+| 适配器版本 | 源码 `3048f6bab82966ee63c25fbf5f6cb51cadf87c6d`，digest `sha256:c273b9605da1ec63f4462c8253d3254399c54ebd01a6cf55767b0105d36e4164`；依据首次成功发布的 build record／推送日志及当前 Deployment，不将 benchmark checkout SHA 当作服务版本 |
+| 运行配置 | 阿里云 dev 独立应用，专用数据库账号，owner 隔离；embedding 为上海 `BAAI/bge-m3`，当前 Add/Search 不调用抽取 LLM；`qwen-plus` 仅用于独立的自建 Answer/Eval |
+| 容量声明 | 初始建议 Add／Search 并发均为 1；这是保守接入建议，尚非最大吞吐或 Full 容量验收结论 |
+| 联系人与机构 | 由负责人填写，并确认组别与允许公开展示的信息 |
+| Eval Key／绑定版本 | 尚未验证可用的官方 Key 或版本绑定；不以适配器 key 替代 |
+
+方法说明草案：适配器按 `user_id` 映射独立 Memoria owner，跨 session 保持同一用户
+的检索范围。Add 同步写入逐条消息及必要的 UTF-8 分片，保留角色／来源时间，使用
+持久 journal 处理重试，并确认写入记录可检索后返回成功。Search 将原始问题交给
+Memoria，保留后端排序、按 ID 去重并限制 Top K，仅返回记忆证据，不生成最终答案。
+后端采用 MatrixOne 存储与上海 bge-m3 embedding；当前不使用 LLM 抽取或 rerank 服务。
+公开数据的检索／作答诊断与参赛服务分开执行，gold 和自建裁判规则不进入 Add/Search。
+最终提交时将此说明与冻结配置及两个源码版本核对。
+
+接入顺序：通过官方 Evaluation Access Request 提交材料，取得 Key 并核对绑定的
+接口／版本；在无其他基准运行时启动 Textual Smoke，保存官方 Run／Job ID、阶段、
+结果和安全错误摘要。官方 Key 与 Memory System Key 是两份不同凭据。
+Smoke 当前限额为每小时 1 次、本届每赛道最多 30 次；Full 每 Key／赛道最多 2 次，
+第二次距首次完成至少 30 天。申请材料截止为 2026-10-31 23:59（UTC+8），评测
+停止为 2026-11-04 23:59。规则来源：[官方文档](https://agentmemories.ai/zh-cn/docs)，
+2026-10-07 核对；实际提交时再次核对。
+
+当前模型资格有待明确：官方 checklist 使用 Open-source Methods／Commercial Products，
+赛事 FAQ 使用学术／工业名称且列出模型限制。上海 bge-m3、纯存储 Add 是否符合拟报
+组别，应在申请中如实披露并请官方确认；不通过修改自建 judge 模型推断已符合要求。
+正式 Full 前设置 `AML_FREEZE=true`、清理排队发布并等待运行中的发布结束，再记录
+最终镜像／源码／配置；评测期间维持冻结，结束后按既定保留与清理方案处理数据。
 
 ### Memoria 镜像选择与源码构建
 

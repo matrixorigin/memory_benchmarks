@@ -164,6 +164,8 @@ not consume official AML Full quota.
 
 See the [benchmark workflow guide](agent_memory_leaderboard/benchmarks/CI.md)
 for data provenance, metric definitions, timeout and resume behavior.
+Recorded self-run results and their limitations are available in
+[baseline reports](agent_memory_leaderboard/benchmarks/baselines/README.md).
 
 ### Interpreting the metrics
 
