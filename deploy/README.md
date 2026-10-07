@@ -19,7 +19,10 @@ CI/CD、Helm chart 和 Pulumi 程序全部在 `memory_benchmarks` 维护。
 未物理删除用户库、journal 或历史快照。此为项目集成测试，不是 AML 官方 Smoke 或质量评分。
 Memoria 默认从 `matrixorigin/memoria` 的 `main` 分支构建，
 也支持选择其他分支、tag、commit 或已发布镜像；实际部署始终使用镜像 digest。
-本次实际来源为 `e180dff308447efb487f313187968e77323dd33f`，未修改 Memoria 源码。
+当前已于 2026-10-07 更新到 `main@81c5cc6d5e86a34072ecbc1bb41979b06364e7c7`，
+包含 Memoria PR #277／#278，使用上述最小联调后的独立更新
+[run 37568843033](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37568843033)。
+新 Pod Ready，公网健康检查为 200；新版本完整基准仍待复测。上文 7 项联调属于旧版本。
 具体 digest 和剩余验收范围见方案文档的[当前交付状态](../agent_memory_leaderboard/docs/competition-plan.md#当前交付状态)。
 
 Memoria 显式采用多库模式：`DATABASE_URL` 与 `MEMORIA_SHARED_DATABASE_URL` 指向同一
@@ -114,7 +117,7 @@ AML auth key 验证调用方，`user_id` 决定数据归属，二者不能互相
 
 ## GitHub Actions 配置
 
-离线 `AML offline CI` 无须手工配置 Secret。下面的运行凭据用于
+离线 `CI - Lint, Tests & Adapter Build` 无须手工配置 Secret。下面的运行凭据用于
 `AML Aliyun dev deployment`，**preview 和 deploy 均需要**，因为 preview 也会检查
 目标集群并推送镜像。源码公开仓库的 checkout 使用 Actions 自动提供的
 `GITHUB_TOKEN`，当前无须额外配置 GitHub PAT。
@@ -238,18 +241,16 @@ workflow 配置检查与 Pulumi 程序均将该 key 列为必填，缺失时在�
 匿名探针仅验证鉴权行为；部署后的真实 Add/Search 已使用配置的 key 和模型完成。
 该最小测试没有独立检查模型原始向量长度，也不提供检索质量评分。
 
-当前保留的 `image` 模式镜像来自 gitops dev 已保存版本
-`apiserver-20260817-a8c0397-dbfc6241`，已读取 registry manifest 并固定为
-`registry.cn-hangzhou.aliyuncs.com/moc-pub/memoria@sha256:26c237a3da16143ff72d74008ac1fe733652944ac5f90b1f2d0ee5d1e87f6147`。
-已核实 amd64 架构和 `memoria serve` 启动命令；运行 API、数据库授权和真实检索兼容性
-仍需在本项目验收。只有选择 `image` 模式才使用它；源码模式默认构建 `main`，
-不会将这份 GitHub Variable 改写为构建结果。更换现成版本时更新
-`AML_MEMORIA_IMAGE` 并保留对应质量基线。
+当前 `AML_MEMORIA_IMAGE` 为
+`registry.cn-hangzhou.aliyuncs.com/moc-pub/plugin@sha256:16d7eefa847749ffd4d61569419110a52b8de8fb78a283a8cd57df004d04ea8b`，
+对应 `main@81c5cc6` 的源码构建产物。只有选择 `image` 模式才使用该 Variable；
+源码模式默认构建 `main`，流程不会自动将 Variable 改写为构建结果。更换现成版本时更新
+`AML_MEMORIA_IMAGE`，并保留构建来源与对应质量基线。
 
 ### 从 Memoria 源码构建
 
 Memoria 源码构建只在本项目的 **AML Aliyun dev deployment** 中执行。
-日常 PR／main push 的 **AML offline CI** 保留适配器镜像检查，不构建 Memoria。
+日常 PR／main push 的 **CI - Lint, Tests & Adapter Build** 保留适配器镜像检查，不构建 Memoria。
 
 | 发布选择 | 是否构建 Memoria |
 |---|---|
@@ -350,6 +351,35 @@ workflow 的分支决定 `memory_benchmarks` 代码；`memoria_build_mode` 和 `
 5. 公网启用后的目标接口为 `https://<host>/add` 和 `https://<host>/search`。
    验收 DNS、证书、鉴权、真实写入检索、用户隔离、重启恢复和端到端时延后再参评。
 
+### 构建与部署的 runner 隔离
+
+发布 workflow 分成两个顺序执行的 job，工作流级并发锁覆盖整个流程：
+
+1. **build**：完成配置／集群预检、离线检查、未选应用快照、所选镜像构建与推送。
+   只输出固定镜像 digest、Memoria 来源与快照 SHA-256；构建记录继续保存为原有 artifact。
+2. **deploy**：使用新的 runner，重新生成私有配置、读取凭据并核对集群及当前部署。
+   单项发布核对跨 job 快照摘要，以及执行 Pulumi 前的实时快照。变化时停止，重新发起运行。
+   然后执行 Go 检查，编译到 `deploy/pulumi/.bin/aml-pulumi`，在 CI checkout 内配置 Go
+   runtime 的 `binary` 选项，preview／up 直接运行该二进制。
+
+Docker／Rust 构建存储与 Go／Pulumi 部署编译存储分别位于两个 runner。
+`deploy/pulumi/Pulumi.yaml` 在仓库中仍采用默认 Go runtime，本地 Pulumi 使用方式保持一致；
+只有 CI checkout 被修改为使用预编译程序。
+[Pulumi Go 预编译程序说明](https://www.pulumi.com/docs/iac/languages-sdks/go/)
+
+磁盘预检分别要求适配器构建前至少 3 GiB、Memoria 源码构建前至少 12 GiB、
+部署程序编译前至少 6 GiB、执行 Pulumi 前至少 2 GiB 可用空间，同时检查 workspace
+与 `RUNNER_TEMP`。不足时输出阶段和可用容量并停止；这些是启动阈值，不是构建峰值保证，
+后续可按实际使用量调整。不要在同一个已耗尽磁盘的 runner 上重试编译。
+
+kubeconfig、运行凭据、生成的私有 stack 配置和完整 Helm values 不进入 job outputs
+或 artifact。两个 job 各自清理临时 kubeconfig、私有 stack 配置与本地快照；
+部署 job 单独读取 `PULUMI_TOKEN`。冻结检查在 job 入口及真实部署前继续生效。
+
+单个 **build** job 最长 90 分钟，**deploy** job 最长 60 分钟。
+选择 `image` 且仅更新 Memoria 时，流程跳过 Docker 构建环境和镜像构建，直接使用配置的 digest。
+参数填写、首次部署、单项更新、镜像命名及证书等待方式继续使用上述说明。
+
 ### ACR 推送格式
 
 两个镜像的构建步骤均使用 `provenance: false` 和 `sbom: false`。当前 ACR 入口不接受
@@ -383,7 +413,7 @@ Memoria 更新采用 Recreate，更新期间适配器进程可继续运行，但
 不可用；比赛评测期间仍应冻结发布。这里的 `memory_benchmarks` 指运行中的 AML 适配器，
 发布不会自动运行 benchmark 或官方评测。
 
-离线检查流程是 **AML offline CI**，不会部署应用。CI 使用固定版本
+离线检查流程是 **CI - Lint, Tests & Adapter Build**，不会部署应用。CI 使用固定版本
 `actionlint v1.7.7` 检查 workflow YAML 和 Actions 表达式。若部署流程仅显示文件路径、
 立即失败且没有 job，应先检查 workflow 文件语法；这种失败不会创建应用资源。
 

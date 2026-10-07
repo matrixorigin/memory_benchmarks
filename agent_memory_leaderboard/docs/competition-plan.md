@@ -39,8 +39,8 @@ CI/CD、Memoria 部署模板和自动证书配置已合入 `memory_benchmarks` �
 |---|---|---|---|
 | 离线 CI | 单个 `checks` job 执行 Ruff、pytest、Helm lint／template、适配器镜像构建、Go Pulumi 检查；八个健康探针用例；不构建 Memoria | 已有 CI 运行通过，pytest 为 154 passed、1 warning；Helm 3.17.4 两组检查及适配器镜像构建通过 | 当前提交以 PR checks 为准；CI 不推送镜像或部署 |
 | benchmark workflow | 手动选择 LoCoMo／LongMemEval-S、固定数据校验、Summary 与 artifact；复用已有执行程序 | LoCoMo 1 个历史成功；3 个历史在第三个 Add 失败；LongMemEval-S 首个历史在 Add 失败，见下文 | 写入失败修复、完整扩展样本和 Answer/Eval 待验收；无正式质量分数 |
-| dev CD | main 手动 preview／deploy、冻结检查、单项更新选择；自动部署默认关闭 | 首次完整 CD 成功，两个镜像推送和 Pulumi up 通过 | 真实单项更新保留效果仍待验收 |
-| Memoria 部署 | 源码／现成镜像模式、分支选择、版本记录及数据库／embedding 配置 | 源码模式部署通过，实际 Pod 在非 root／只读根文件系统下 Ready | 现成镜像模式与重启恢复仍待验收 |
+| dev CD | main 手动 preview／deploy、冻结检查、单项更新选择；独立 build／deploy runner；自动部署默认关闭 | 首次完整 CD 及固定镜像单项更新成功，适配器 Pod 保留 | 新版源码模式端到端发布仍待验收 |
+| Memoria 部署 | 源码／现成镜像模式、分支选择、版本记录及数据库／embedding 配置 | main 源码产物以固定 digest 更新成功，新 Pod Ready，单项更新保留适配器 | 源码构建与部署的 runner 磁盘预算、未知写入恢复仍待验收 |
 | Add/Search 部署 | Deployment、Service、journal PVC 和 `/ready` | PVC Bound；公网真实 Add/Search 七项最小联调通过 | 持久性、未知写入恢复及容量仍待验收 |
 | 数据库 | 专用用户／角色／共享库初始化及动态用户库授权 | 权限边界、共享及用户 schema 初始化、真实写入／检索通过 | 恢复及保留期限／物理清理仍待验收 |
 | GitHub 配置 | 运行凭据／环境变量配置，上海 embedding key 为必填 | 本次部署验证集群、Pulumi、ACR、数据库及应用认证链路 | 未来凭据轮换与权限变更重新验收 |
@@ -250,7 +250,7 @@ Ingress 配置 1800 秒读／发送超时，并关闭上游自动重试。正式
 
 ### 离线 CI
 
-PR、main push 或手动触发 **AML offline CI** 时，执行依赖锁定安装、Ruff、pytest、固定版本 `actionlint v1.7.7` 的 workflow YAML／Actions 表达式检查、Helm lint／template、适配器镜像构建及 Pulumi 程序编译／测试，统一在 `checks` job 中执行；适配器镜像不推送到 registry，离线 CI 不 checkout 或构建 Memoria。Helm 检查使用假镜像 digest、模型 URL 和域名，覆盖内部入口／单 worker，以及公网 Ingress／Certificate／两个 worker。workflow 不引用集群、Pulumi、ACR 或跨仓库发布 Secret，不自动运行真实 HTTP smoke、LLM 基准或官方 Smoke／Full。这里的离线指不调用真实业务／评测接口，依赖安装和本仓库 checkout 仍需要网络。
+PR、main push 或手动触发 **CI - Lint, Tests & Adapter Build** 时，执行依赖锁定安装、Ruff、pytest、固定版本 `actionlint v1.7.7` 的 workflow YAML／Actions 表达式检查、Helm lint／template、适配器镜像构建及 Pulumi 程序编译／测试，统一在 `checks` job 中执行；适配器镜像不推送到 registry，离线 CI 不 checkout 或构建 Memoria。Helm 检查使用假镜像 digest、模型 URL 和域名，覆盖内部入口／单 worker，以及公网 Ingress／Certificate／两个 worker。workflow 不引用集群、Pulumi、ACR 或跨仓库发布 Secret，不自动运行真实 HTTP smoke、LLM 基准或官方 Smoke／Full。这里的离线指不调用真实业务／评测接口，依赖安装和本仓库 checkout 仍需要网络。
 
 Memoria 是独立来源仓库，日常适配器、评测或文档变更不重复编译它。其源码构建只在
 **AML Aliyun dev deployment** 选择更新 `both`／`memoria`、且有效模式为 `source` 时执行；
@@ -347,7 +347,7 @@ Top K 请求的结果或性能。旧报告无法重建前缀分数，显示不�
 它不代表答案正确率、正式 AML 成绩或总体质量；一个历史的样本覆盖有限，且 Top K 100
 需要结合返回证据量／预算解释，不能只以高召回认定比赛质量。
 
-#### 扩大范围的真实结果与当前阻塞
+#### 修复前的扩大范围结果
 
 2026-10-06 使用同一公网部署串行执行两套测试。benchmark commit 均为
 `e06fd477190cb1e7c1d716147f4171d85a342574`、Top K 100；启动前只读核对
@@ -378,13 +378,102 @@ embedding 客户端会重试发送错误、5xx 和 429，但成功状态下的�
 为何无法解码，也不能把所有 HTTP 500 判为未提交。适配器对模糊结果停止重发是当前
 幂等保护设计，负查询本身不授权重置 journal。
 
+[Memoria #275](https://github.com/matrixorigin/memoria/issues/275) 的代码核实已使用实际
+`memoria-embedding` crate 和本地 HTTP 故障服务完成：HTTP 200 响应体截断时仅请求
+一次便失败，即使第二次响应已准备为正常向量；503 后恢复的对照则请求两次并成功。
+这确认了瞬时响应体读取失败未重试的缺口。无效 JSON／不兼容 schema 同样只请求一次，
+但此类持久格式错误不应一律重试。线上原始异常响应未留存，不能据此认定线上一定是
+截断。配置多个 embedding 地址时外层可切换地址；单地址直接使用该 HTTP 客户端，
+没有额外的同地址响应体重试。
+
 **LongMemEval 数据接收：** 失败位置为 `e47becba/session_13/0` 的第四条消息，
 前三条已为 `stored`，第四条为 `pending`。对原始输入和部署版本的敏感规则进行离线
 匹配，仅该消息命中 HIGH 级 `password_assign`（字段词为 `secret`）。部署的存储入口
 会在 embedding／持久化前拒绝该规则匹配，映射 HTTP 403；这与失败位置、已接收的
-同用户消息及 journal 状态一致。尚未将其定性为真实凭据或误报；`secret[:=]value`
-这样的广泛匹配需要结合具体语境评审。不能通过丢弃该消息、改写原始文本、排除历史
-或把 403 包装成 Add 成功获取“完整”基线。
+同用户消息及 journal 状态一致。进一步检查原始消息语境及实际 Rust 检测器，已确认
+这是烤排骨干腌技巧中的普通表达误报：`share a secret: **dry brining**` 被当作凭据。
+原始消息和最小普通文本 `The secret: practice every day.` 均返回 `blocked=true`、
+`password_assign`，真实格式的合成密码对照仍被拒绝，无该短语的普通文本被接受。
+[Memoria #276](https://github.com/matrixorigin/memoria/issues/276) 因此已在代码层面确认
+存在误报；仅增加单词边界不足以修复独立的 `secret:` 普通表达，需要区分语境并保留
+真实凭据保护。不能通过丢弃该消息、改写原始文本、排除历史或把 403 包装成 Add 成功
+获取“完整”基线。
+
+#### Memoria 修复交付
+
+两项独立修复已合并到 `matrixorigin/memoria` main；2026-10-07 已部署包含两项
+修复的 `main@81c5cc6`。部署后的相同 LoCoMo／LongMemEval 选择均已完整通过，
+实际版本、结果和验收边界见下文“修复版本的线上回归”。
+
+| 修复 | 设计与验证 |
+|---|---|
+| [PR #277](https://github.com/matrixorigin/memoria/pull/277)，`d341891` | 将 HTTP 响应体读取和 JSON 解析分开，读取失败和 JSON EOF／IO 复用原有三次尝试及退避，覆盖无 Content-Length 与 chunked 响应。JSON Syntax／Data 错误立即返回稳定分类；除 429 外 HTTP 4xx 不重试，5xx／429 仍重试。单条／批量均校验向量数量与配置维度；提供 index 时要求完整、唯一的 0..N-1 并恢复输入顺序，全部省略 index 时兼容原响应顺序。embedding crate 37 个测试通过，其中 18 个 HTTP／客户端测试覆盖恢复、耗尽、格式、认证、连接、限流及向量契约；Clippy／格式／diff 检查通过。 |
+| [PR #278](https://github.com/matrixorigin/memoria/pull/278)，`cfb9866` | 仅对独立 bare `secret:` 要求行首／对象字段边界，支持 YAML 列表与引号字段；叙述中的该短语不再等同于凭据。password／passwd 保留原有无前置单词边界的检测，任意标识符的 secret 后缀继续拦截，覆盖环境变量、驼峰、下划线、连字符及 Unicode 前缀。显式凭据字段、bare `secret=` 和结构化 `secret:` 仍拦截。core crate 18 个测试通过，含 5 个回归测试函数；原始 LongMemEval 消息通过实际修复后 Rust 检测器，本地完整正文未提交；Clippy／格式／diff 检查通过。 |
+
+敏感规则按输入语法判断，不依赖数据集名或烹饪短语白名单。独立行的 `secret: value`
+及显式别名 `Our client secret: ...` 仍保守拦截，含义模糊时并不保证所有普通表达均被接受；
+不得将正则启发式表述为完整的语义凭据识别。真实 AWS key、私钥、Bearer token 与
+MEDIUM 级脱敏仍保留。PR #278 关联 #276，不自动关闭该 issue；内容策略拒绝与认证／权限
+拒绝的可操作 API 分类仍是未完成项；部署后首个历史的完整复测已通过。
+
+embedding 修复重试的是写入前的向量计算。三次请求分别保留 30 秒超时，退避为
+200／400 毫秒，请求与退避预算约 90.6 秒；并发许可等待单独计时，默认最多 5 秒。
+该预算不是新增的端到端严格截止时间。错误保留 HTTP 状态与安全的超时、连接、请求体、
+响应体及 JSON 分类，不记录或回传上游正文、意外 JSON 值、请求 URL 或凭据，截短正文
+同样可能包含秘密。持续格式不兼容、维度／数量／index 不正确的响应仍失败；无 index
+的提供商依赖自身返回顺序，无法验证其语义顺序。
+
+没有新增记忆写入重放、原子幂等或结构化未提交状态。通用 HTTP 500 的写入结果仍需按
+既有保护处理，旧 inflight journal 不直接重置；该协议能力与瞬时响应读取／EOF 故障
+分开跟踪，#275 仍作为关联 issue 保留。原始线上异常原因尚未确定。
+
+本项目发布 workflow 已将 `main@81c5cc6` 的源码构建镜像部署到 dev，目标为
+`deployment_target=memoria`，源码 SHA、构建及部署 run、镜像 digest 见“当前交付状态”。
+已使用新 run 重跑相同 LoCoMo 三个历史和 LongMemEval-S 首个历史；完整写入与检索
+结果构成该选择范围的线上恢复验收。旧 inflight journal 未重置或自动重放。
+
+#### 修复版本的线上回归
+
+2026-10-07 在同一公网入口串行完成两套回归，benchmark commit 为
+`9eed5b49a18313e3883e78fabec10631c16a3367`，Top K 为 100。两份报告的 `contract`
+分别与各自的失败运行完全一致，包括数据 SHA256、历史 ID、入口、Top K 和 runner
+版本；新执行程序增加逐题审计与排序前缀统计，没有改变该比较范围。
+使用新的随机 run ID 隔离用户及请求，没有复用部分写入、改写输入、排除阻塞消息或
+变更 gold 评分规则。评测前后只读核对的两个镜像 digest 与“当前交付状态”一致，
+Pod UID 不变、Ready 且重启次数为 0；`runtime_label` 仍只是操作者备注。
+
+| 运行 | 完整性 | 检索诊断 | 执行耗时 |
+|---|---|---|---|
+| [LoCoMo，3 个历史](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37571328104) | 101／101 个 Add 批次；242／242 道文本题；跳过 104 道多模态题；报告 `completed`、无终止错误 | 241 道有证据标签；平均召回 83.61%；全部证据命中率 80.50%；空结果 0；Search P50／P95 为 0.99／2.63 秒 | 2096.29 秒，约 34.94 分钟 |
+| [LongMemEval-S，1 个历史](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37574166791) | 69／69 个 Add 批次；1／1 道文本题；报告 `completed`、无终止错误 | 唯一一道题的证据在第一位，Recall@1／100 均为 100%；Search 1.01 秒 | 661.05 秒，约 11.02 分钟 |
+
+报告确认原失败批次 `conv-41/session_15/0`、`e47becba/session_13/0` 均已完成。
+LoCoMo 的响应解码错误导致整轮中断、LongMemEval-S 原始普通文本 `secret:` 导致
+403 的误报均未复现。两个观察窗口未记录 Memoria 内部服务或 embedding 错误。
+一次成功运行不证明瞬时响应体故障不可能发生，也不代替注入故障测试、未知写入恢复
+或全部输入验收。
+
+适配器访问日志分别记录 LoCoMo 11 次、LongMemEval-S 4 次 Add HTTP 503，均在既有
+有界重试后继续完成；成功的外部 Add 分别为 101／69 次，Search 为 242／1 次。
+这是 HTTP 尝试次数，不是失败批次数；完整通过不等于没有短暂不可用。现有成功
+checkpoint 不保存中间重试原因，访问日志也只有状态码，不能据此认定这些 503 是
+解码失败、未知写入或搜索可见性延迟。应补充安全的重试原因与次数观测后定位，
+避免仅依据状态码修改重试或 journal 幂等语义；本轮没有确认新的代码 bug。
+
+| LoCoMo 返回前缀 K | 1 | 5 | 10 | 20 | 50 | 100 |
+|---|---|---|---|---|---|---|
+| 平均证据召回率 | 43.12% | 60.51% | 67.88% | 72.03% | 78.22% | 83.61% |
+
+三个历史 Recall@100 分别为 `conv-26` 80.23%、`conv-30` 83.62%、`conv-41`
+86.60%。旧运行只有前两个历史，81.25% 不能与新三个历史的 83.61% 直接当作
+算法提升比较；限制为共同的 144 道有证据题时，本次为 81.60%。单次轻微变化不作为
+检索算法优化结论。242 道文本题均已审计，其中 `conv-26#q0028` 仍含已披露的
+不匹配 gold 标签 `D8:6; D9:17`，保留 exact-ID 计分，不静默修正或排除。
+
+LongMemEval-S 的 100% 只对应一道题，不能代表 500 题或全部能力。上述均为检索
+证据指标，没有执行 Answer/Eval、AML 官方 Smoke／Full 或生成官方分数。
+完整报告和证据 ID／hash 位于各 run 的 `aml-benchmark-<run_id>-1` artifact，
+按既有 30 天期限保留；后台数据仍须执行既定清理。
 
 **来源时间验收范围：** 当前公开数据 runner 只在正文保存会话日期，不发送 AML
 `timestamp`，因此上述数据集运行不能证明时间戳适配正确。额外隔离合成探针分别使用
@@ -399,20 +488,20 @@ Memoria 衰减逻辑，也不宣称覆盖所有检索模式／配置。
 
 后续按以下顺序推进，不为每套数据集另建 workflow：
 
-1. **先修复数据接收与写入可靠性**：核查 embedding 服务的成功响应格式、截断及稳定性；
-   在上游客户端补充有界的安全解码／读取重试和非秘密错误分类。未知写入的自动恢复
-   需要后端原子幂等或可信的未提交状态契约，不能按通用 5xx 或等待时长盲目重发。
-   同时评审敏感规则的语境与 benchmark 数据接收契约，保留安全边界，不在 runner 中
-   默默洗掉阻塞输入。两项都需独立回归与真实验收，尚未修改 Memoria 源码或发布。
-2. **重新建立完整扩展基线**：修复验收后保持版本固定，重跑 LoCoMo 前 3 个历史及
-   LongMemEval-S 首个历史，确认 Add 全部成功、所有文本题执行、报告无部分完成标记；
-   再扩大样本。当前不继续堆叠更多失败的全量运行。
+1. **继续验证写入可靠性与可恢复性**：PR #277／#278 已在固定小集完成线上回归；
+   补充安全的中间重试原因与次数观测，定位可恢复 503，并在扩大范围时继续验证
+   embedding 格式与稳定性。固定选择的完整接收不代表任意输入均已验收。
+   未知写入的自动恢复需要后端原子幂等或可信的未提交状态契约，不能按通用 5xx 或
+   等待时长盲目重发。数据接收保留安全边界，不在 runner 中默默洗掉阻塞输入。
+2. **保留已完成的扩展小集基线**：LoCoMo 前 3 个历史及 LongMemEval-S 首个历史
+   已全部写入、执行所有文本题且报告完整；保留版本、数据校验值、指标和 run 链接，
+   后续比较使用相同选择及评分口径，再扩大样本。
 
-3. **扩大现有 LoCoMo 覆盖**：保持后端与配置固定，先用 `histories=3`／`5` 查看
+3. **扩大现有 LoCoMo 覆盖**：保持后端与配置固定，在已通过的 3 个历史基础上扩至 5 个，查看
    不同历史和类别结果；再评估全 10 个历史。当前 Execute 限时 120 分钟，扩大前需核对
    写入量和实际耗时，不能把单历史时长视为全量保证。以固定样本做后续变更对照。
-4. **运行已接入的 LongMemEval-S**：同一 workflow 选择 `longmemeval`，先用
-   `histories=1` 验证链路，再扩至 `10`。每个历史只有一道问题，1 或 10 个历史主要用于
+4. **扩大已接入的 LongMemEval-S**：首个历史已完整通过；同一 workflow 选择
+   `longmemeval`，后续扩至 `histories=10`。每个历史只有一道问题，1 或 10 个历史主要用于
    初步验证，不能代表完整 500 题质量或覆盖全部能力；正式基线需后续扩展样本范围。
 5. **补齐质量评分**：接入 Answer/Eval，固定回答模型、提示词、证据预算和裁判规则，
    使用原数据已有 gold answer／evidence 评分，保持 gold 不进入 Add/Search。
@@ -521,7 +610,7 @@ API 地址、集群 UID 和租户标识属于环境信息，不等同于密码�
 
 `main` 或其他分支在不同运行中可以更新；重放某次 preview／评测时可把实际 SHA 填入 `memoria_ref`，或改用那次镜像 digest。镜像 tag 只用于查找，实际发布与回退使用 digest；源码版本固定与最终镜像版本均可追溯。preview 后若分支改变，下一次默认分支 deploy 可能构建不同版本，需用记录的 SHA 指定相同来源。
 
-保留 `image` 模式用于部署现成镜像与回退，手动 `memoria_build_mode` 可覆盖本次选择；`configured` 按 Variable 或 JSON 中默认模式执行。该模式要求 `AML_MEMORIA_IMAGE=repository@sha256:...`，跳过 Memoria checkout／构建。现有 Variable 沿用 gitops dev 的 `apiserver-20260817-a8c0397-dbfc6241`，不是源码模式的默认版本，也没有已确认的完整源码 SHA。当前源码构建版本的真实 Add/Search 已通过；该既有现成镜像的运行兼容性仍待验收。
+保留 `image` 模式用于部署现成镜像与回退，手动 `memoria_build_mode` 可覆盖本次选择；`configured` 按 Variable 或 JSON 中默认模式执行。该模式要求 `AML_MEMORIA_IMAGE=repository@sha256:...`，跳过 Memoria checkout／构建。当前 Variable 指向 `main@81c5cc6` 的源码构建产物，digest 与构建来源见“当前交付状态”，该固定镜像的部署及上述两套完整小集 Add/Search 回归已通过。之前 gitops dev 的旧 `apiserver-20260817-a8c0397-dbfc6241` 镜像不再由此 Variable 选择，其运行兼容性未验收。
 
 #### ACR 镜像发布兼容性
 
@@ -537,34 +626,67 @@ commit 和 Actions run 继续写入原有版本记录／镜像标签；这类记
 
 ### 当前交付状态
 
-**阿里云 dev 首次完整部署和公网最小联调已完成。**
-[部署 run 37459492335](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37459492335)
-于 2026-10-06 成功完成，使用 benchmark commit `3048f6bab82966ee63c25fbf5f6cb51cadf87c6d`，
-总耗时约 14 分 48 秒。离线检查、源码构建、两个 ACR 镜像推送、Pulumi up、Pod 拉取与
-证书等待均通过；现有 Pulumi token、registry 和数据库运行凭据满足本次发布。
+**阿里云 dev 已更新为包含 PR #277／#278 的 Memoria main 源码镜像。**
+[部署 run 37568843033](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37568843033)
+于 2026-10-07 12:07（Asia/Shanghai）成功完成，发布控制代码为 benchmark commit
+`9eed5b49a18313e3883e78fabec10631c16a3367`。本次仅更新 Memoria，使用已经由
+[源码构建 run 37566751796](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37566751796)
+发布的固定 digest；该构建记录将 `main` 解析为下面的实际 SHA，不依赖浮动镜像 tag。
 
 | 应用 | 实际版本 |
 |---|---|
 | 适配器 | `registry.cn-hangzhou.aliyuncs.com/moc-pub/plugin@sha256:c273b9605da1ec63f4462c8253d3254399c54ebd01a6cf55767b0105d36e4164` |
-| Memoria | `registry.cn-hangzhou.aliyuncs.com/moc-pub/plugin@sha256:f4c4c21c6d1cfe8f1623f58c6b1e11df9ed0f4e0a8a00e98455dacf3852b3721` |
-| Memoria 来源 | `matrixorigin/memoria`，ref `main`，实际 SHA `e180dff308447efb487f313187968e77323dd33f` |
+| Memoria | `registry.cn-hangzhou.aliyuncs.com/moc-pub/plugin@sha256:16d7eefa847749ffd4d61569419110a52b8de8fb78a283a8cd57df004d04ea8b` |
+| Memoria 来源 | `matrixorigin/memoria`，ref `main`，实际 SHA `81c5cc6d5e86a34072ecbc1bb41979b06364e7c7` |
+| Memoria 构建 tag | `registry.cn-hangzhou.aliyuncs.com/moc-pub/plugin:aml-memoria-20261007-81c5cc6` |
 
-两个 Deployment 均为 1/1 Ready、验收时无重启，20Gi journal PVC Bound。
-Ingress 为 `aml.cn-dev.matrixone.tech`，公网地址 `47.97.230.53`，`aml-tls` Certificate Ready。
-使用正常 HTTPS 证书验证请求公网 `/health` 和 `/ready` 均为 200，匿名 `/search` 为 401。
-Memoria 实际以 UID 1000、只读根文件系统运行，显式采用多库及独立共享库配置。
+两个 Deployment 均为 1/1 Ready、验收时无重启。Memoria 新 Pod UID 为
+`9d2e80a8-b759-4e30-82aa-ac2d2a3d5517`；适配器保留原 Pod UID
+`3f3a7c5a-0e79-459a-957b-cae00cea7b93`、镜像及启动时间，单项更新的实际保留行为已验收。
+Ingress 为 `aml.cn-dev.matrixone.tech`，`aml-tls` Certificate Ready，正常 HTTPS
+证书校验下 `/health`、`/ready` 均为 200。部署流程只执行健康检查；随后手动运行的
+两套完整小集 Add/Search 回归均已通过，见“修复版本的线上回归”。旧 inflight journal
+未修改；健康检查与实际基准验收分别记录。
 
-本项目现有 `src.smoke` 通过公网适配器与临时 Memoria Service 转发完成 7 项联调：
+发布 workflow 使用独立的 `build`／`deploy` job，并由工作流级并发锁串行化。
+镜像构建及其 Docker／Rust 缓存位于 build runner；Go／Pulumi 位于新的 deploy runner。
+跨 job 只传递固定镜像 digest、Memoria 来源与配置快照 SHA-256。kubeconfig、运行凭据、
+私有 stack 配置及完整 Helm values 不作为输出或 artifact。两个 job 分别预检目标集群，
+单项发布核对跨 job 快照摘要和 Pulumi 前的实时快照，变化时停止，不覆盖未选应用。
+构建记录继续由 build job 保存，image 模式记录本身不提供源码 SHA。
+
+部署 job 将 Go 程序编译到 `deploy/pulumi/.bin/aml-pulumi`，在该 CI checkout 内设置 Go
+runtime `binary` 后执行 preview／up，避免 Pulumi 再次编译。仓库中的 `Pulumi.yaml`
+仍保留默认 Go runtime，不强制本地使用预编译文件。Go 检查继续执行，build job 不安装
+Go 或编译部署程序。`PULUMI_TOKEN` 仅进入 deploy job，凭据和临时配置各自在所在 job 清理。
+
+磁盘启动阈值为适配器构建 3 GiB、Memoria 源码构建 12 GiB、Go 编译 6 GiB、Pulumi
+执行 2 GiB，检查 workspace 与 `RUNNER_TEMP`；阈值不足则明确失败，并不承诺构建峰值
+永远不耗尽磁盘。build／deploy 超时分别为 90／60 分钟。仅更新 Memoria 且选择 image
+模式时不创建 Docker 构建环境。main 来源、固定 digest、三个部署目标、原有证书等待与
+冻结保护继续采用既有设计；自动发布保持默认关闭。
+
+上述隔离方案针对
+[run 37566751796](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37566751796)
+已证实的磁盘耗尽：源码镜像已推送成功，Pulumi 的 Go 再编译出现
+`no space left on device`，失败发生在资源修改前。当前线上版本通过固定镜像的
+[run 37568843033](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37568843033)
+部署，Repository Variable `AML_MEMORIA_IMAGE` 指向上表 digest，默认源码 ref 仍为 main。
+新版 workflow 的源码模式端到端发布仍须在合并后运行验收；既有成功部署不作为新版流程
+已通过的证据。
+
+首次完整部署的 [run 37459492335](https://github.com/matrixorigin/memory_benchmarks/actions/runs/37459492335)
+于 2026-10-06 完成；当时旧 Memoria `e180dff` 与同一适配器已通过 7 项公网最小联调：
 owner 范围认证、同步 Add 后立即 Search、跨会话检索、用户隔离、幂等重试、top_k、空用户。
-耗时 16.32 秒；真实数据库初始化、写入／检索与上海 `BAAI/bge-m3` 配置下的调用通过。
-测试只使用随机 UUID 用户，测试记忆随后逻辑停用，临时转发已关闭；用户库、journal
-及历史快照没有物理删除。此测试不等同于 AML 官方 Smoke，不产生榜单质量分数，也未
-独立校验模型原始向量维度。
+耗时 16.32 秒，使用随机 UUID 用户，测试记忆随后逻辑停用、临时转发关闭；用户库、journal
+及历史快照没有物理删除。该联调验证旧版本的真实数据库与上海 `BAAI/bge-m3` 调用，
+不等同于新版本回归、AML 官方 Smoke 或榜单质量分数，也未独立校验原始向量维度。
 
-剩余运行验收包括单项更新时未选 Pod 的保留、重启及未知写入恢复、公网长请求与真实
-SLB 超时、容量／P50／P95、凭据丢失恢复及数据物理清理策略。旧现成镜像模式未作运行验收。
-本项目的 Answer/Eval、基准质量与正式 AML Smoke／Full 也未由本次部署执行；部署成功
-不代表正式参评就绪。发布冻结、worker 参数、Helm 检查、ready 用例、依赖锁定、私有配置
-及初始化恢复保护均保留现有设计。
+修复版本已完成上述固定选择的完整写入／检索回归；剩余运行验收包括更大样本、
+可恢复 503 的原因观测、未知写入恢复、公网长请求与真实 SLB 超时、并发容量与时延、
+凭据丢失恢复及数据物理清理策略。通用 image 模式已通过本次
+源码产物部署，但既有 gitops 旧镜像的兼容性不因此得到验证。Answer/Eval、正式 AML
+Smoke／Full 未由本次部署执行；部署成功不代表正式参评就绪。发布冻结、worker 参数、
+Helm 检查、ready 用例、依赖锁定、私有配置及初始化恢复保护继续采用现有设计。
 
 后续代码和实验通过本项目任务／PR 共建。旧独立 Memoria 路径未迁入；既有核实结论见 [Issue #1 独立修正评论](https://github.com/matrixorigin/memory_benchmarks/issues/1#issuecomment-5987006462)。

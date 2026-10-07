@@ -196,6 +196,14 @@ def pin(args: argparse.Namespace) -> None:
     args.metadata_file.parent.mkdir(parents=True, exist_ok=True)
     args.metadata_file.write_text(json.dumps(metadata, indent=2) + "\n")
     append_values("GITHUB_ENV", {"AML_MEMORIA_IMAGE": image})
+    # Only nonsecret immutable image/source identifiers cross the job boundary.
+    adapter_image = os.getenv("AML_ADAPTER_IMAGE", "")
+    if adapter_image:
+        checked(IMAGE_PATTERN, adapter_image, "Adapter image must be pinned by digest")
+    append_values("GITHUB_OUTPUT", {
+        "mode": mode, "image": image, "adapter_image": adapter_image,
+        "source_repository": repository, "source_ref": source_ref, "source_commit": commit,
+    })
     summary = os.getenv("GITHUB_STEP_SUMMARY")
     if summary:
         with Path(summary).open("a") as output:
