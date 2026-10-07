@@ -28,9 +28,9 @@ jobs:
           python-version: '3.12'
           enable-cache: true
           cache-dependency-glob: agent_memory_leaderboard/uv.lock
-      - run: uv sync --locked
-      - run: uv run ruff check src tests benchmarks scripts/benchmark_ci.py ../deploy/scripts ../deploy/tests
-      - run: uv run pytest -q
+      - run: uv sync --locked --extra evaluation
+      - run: uv run --no-sync ruff check src tests benchmarks scripts/benchmark_ci.py ../deploy/scripts ../deploy/tests
+      - run: uv run --no-sync pytest -q
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
         with:
           version: v3.17.4

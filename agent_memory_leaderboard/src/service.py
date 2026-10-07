@@ -1,9 +1,9 @@
 import hashlib
 import json
-from datetime import UTC, datetime, timedelta
 
 from .config import Settings
 from .errors import AdapterError
+from .ingestion import message_parts
 from .journal import Journal
 from .memoria import Memoria
 from .models import AddRequest, AddResponse, Evidence, SearchRequest, SearchResponse, text_content
@@ -13,15 +13,6 @@ def digest(value: object) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
-
-
-def split_utf8(text: str, limit: int):
-    remaining = text.encode("utf-8")
-    while remaining:
-        # Only omit an incomplete trailing code point; consume it on the next iteration.
-        part = remaining[:limit].decode("utf-8", errors="ignore")
-        yield part
-        remaining = remaining[len(part.encode("utf-8")) :]
 
 
 class MemoryAdapter:
@@ -51,21 +42,10 @@ class MemoryAdapter:
     def write_bodies(self, request: AddRequest, key: str):
         session = digest([self.settings.namespace, request.user_id, request.session_id])
         for message_index, message in enumerate(request.messages):
-            observed_at = None
-            header = f"[{message.role}]\n"
-            if message.timestamp is not None:
-                observed_at = (
-                    (datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=message.timestamp))
-                    .isoformat(timespec="milliseconds")
-                    .replace("+00:00", "Z")
-                )
-                header = f"[{message.role} at {observed_at}]\n"
-            for part_index, part in enumerate(
-                split_utf8(text_content(message.content), 32768 - len(header.encode("utf-8")))
-            ):
+            for part_index, (content, observed_at) in enumerate(message_parts(message)):
                 marker = digest([key, message_index, part_index])
                 body = {
-                    "content": header + part,
+                    "content": content,
                     "memory_type": "episodic",
                     "session_id": session,
                     # Near-duplicate detection is subject-scoped. Separate evidence

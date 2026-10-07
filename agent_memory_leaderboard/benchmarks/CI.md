@@ -2,11 +2,12 @@
 
 ## 范围
 
-**AML benchmark** 手动调用已部署的阿里云 dev Add/Search，运行公开数据的检索评测。
+**AML benchmark** 手动调用已部署的阿里云 dev Add/Search，运行公开数据的检索评测或可选的本地 Answer/Eval。
 第一版可选择 **LoCoMo-Refined** 和 **LongMemEval-S**，复用 `src/benchmark.py`；
-不会重新部署服务，也不会启动 Answer/Eval 或 AML 官方 Smoke／Full。
-不需要 LLM、Memoria master key、数据库、kubeconfig 或 Pulumi 凭据。
-唯一业务 Secret 为本仓库已有的 `AML_ADAPTER_API_KEY`，仅传入实际执行步骤，并映射为
+不会重新部署服务，也不会启动 AML 官方 Smoke／Full。默认 `retrieval` 不调用回答／裁判模型；
+`answer-eval` 调用独立配置的模型，详见[评测与诊断](EVALUATION.md)。
+默认检索模式不需要 LLM；两种模式均不需要 Memoria master key、数据库、kubeconfig 或 Pulumi 凭据。
+Add/Search 使用本仓库已有的 `AML_ADAPTER_API_KEY`，仅传入实际执行步骤，并映射为
 runner 读取的 `ADAPTER_API_KEY`。
 
 ## 如何运行
@@ -21,6 +22,7 @@ runner 读取的 `ADAPTER_API_KEY`。
 | 参数 | 默认值／填写方法 |
 |---|---|
 | `dataset` | 默认 `locomo`；`longmemeval` 指 LongMemEval-S，不是 Refined |
+| `mode` | 默认 `retrieval`；可选 `answer-eval`，需要下列模型配置 |
 | `histories` | 默认 `1`，允许 `1–10`；选定数据版本的前 N 个完整历史，不是问题数 |
 | `top_k` | 默认 `100`，允许 `1–100` |
 | `runtime_label` | 可选非秘密版本备注，默认留空；可填实际部署的 Memoria commit／镜像 digest 和适配器版本，最多 200 字符，不要填 key 或连接串；仅用于报告 |
@@ -100,14 +102,57 @@ Summary 展示各切点的有标签覆盖题数、平均召回和全部证据命
 旧报告缺少前缀指标，显示不可用；续跑混合旧／新记录时，以各切点实际覆盖题数解释，
 不能假设覆盖所有已检索问题。
 
-当前 **不计算 Token F1、BLEU-1、答案正确率或 AML 官方分数**。这些需要另外实现
-Answer/Eval 及各数据集的原生评分。成功的 workflow 表示本次流程完成，不代表达到
-预设质量阈值；第一版不设置未经基线验证的分数门槛。
+默认 retrieval 不计算答案指标。answer-eval 显示 Token F1、BLEU-1、本地 judge 分数、
+预算内证据召回和未完成评分题数。全部质量指标是 0–1、越大越好；没有 gold 的题目
+标记 skip。局部 judge 分数不宣称等价于数据集原生评分或 AML 分数。成功只表示流程
+完成，不设置未经干净基线验证的质量门槛。
+
+模型客户端对网络错误、429／5xx 最多尝试 4 次，指数退避为 0.5／1／2 秒；429 的
+数字 Retry-After 最多等待 30 秒。裁判支持完整代码块包裹的严格 JSON；无效判分、
+截断输出或重试耗尽只将该题标为 answer_failed／judge_failed，继续后续题目。
+401／403／404／405 等认证／地址错误仍尽早停止整轮。存在失败待评题时最终 status
+为 partial、退出码为 1，workflow 会显示失败，但 Summary 和 artifact 仍发布。
+Summary 单列 eligible／scored／pending、评分覆盖率及两类失败题数；覆盖率分母排除
+多模态和 missing-gold skip。各均值只使用有该指标的题目，judge_failed 的有效答案
+仍可能参与词法指标。不能将部分成功题的均值视为完整质量基线。
+
+### Answer/Eval 的额外配置
+
+在 repository Settings → Secrets and variables → Actions 中配置：
+
+| 类型 | 名称 | 用途 |
+|---|---|---|
+| Variable | `AML_BENCHMARK_ANSWER_MODEL` | 回答模型名称 |
+| Variable | `AML_BENCHMARK_ANSWER_BASE_URL` | OpenAI-compatible `/v1` base URL，不含密钥或 query |
+| Secret | `AML_BENCHMARK_ANSWER_API_KEY` | 回答模型凭据 |
+| Variable | `AML_BENCHMARK_JUDGE_MODEL` | 裁判模型名称 |
+| Variable | `AML_BENCHMARK_JUDGE_BASE_URL` | 裁判服务 base URL |
+| Secret | `AML_BENCHMARK_JUDGE_API_KEY` | 裁判凭据，可与回答模型服务相同 |
+
+这些配置仅在选择 answer-eval 时必需；retrieval 模式不使用它们。执行前验证必填项，
+缺失时不写入记忆。准备步骤不读取模型凭据。工作流安装锁定的 evaluation extra；
+适配器镜像不需要此 extra，也不需要重新部署。
+
+全部输入（指令、角色、问题、选项／问题日期、证据）按固定 `o200k_base` 编码加
+256 token 余量进行本地预算计数，上限 117760；保留完整记录的排名前缀。它不是所有
+模型或 AML 的准确 tokenizer／chat template。报告记录模型实际 prompt usage（如有）；
+上游报告超过预算会失败。正式可比性仍需确认目标 tokenizer 和原生评测契约。
+
+每个 HTTP attempt 的状态、固定原因码、耗时、重试标记与请求标识 hash 写入
+`run.requests.jsonl`，Summary 展示按 route／status／reason 聚合的数据。
+未知错误只记为 unclassified，不保存原始错误正文；重试集合、次数和 Add ID 不变。
+
+来源 ID 已移出模型可见内容。`run.sources/` 用本地内容 hash 映射消息和 UTF-8 分片；
+多来源重复文本标记歧义，改写／未知内容标记 unmapped，均不计作已命中来源。
+Summary 同时显示这些数量。新契约与旧标签版本不同，必须重新建立质量基线。
 
 Artifact 名称为 `aml-benchmark-<run id>-<attempt>`，保存 30 天，包含：
 
 - `selection.json`：固定数据来源、输入和版本信息。
-- `run.json`：已有 runner 的完整报告／断点、随机 run ID 和用户列表。
+- `run.json`：运行中的小型 header，结束时包含完整问题结果、随机 run ID 和用户列表。
+- `run.questions/`：逐题原子保存的增量断点；硬中断后的报告／续跑需要一起保留。
+- `run.sources/`：本地来源 ID／内容 hash 映射，无正文或 gold answer。
+- `run.requests.jsonl`：安全 HTTP attempt 诊断。
 - `run.evidence/`：返回证据 ID、内容 hash 等审计信息，不保存检索正文。
 - `summary.json`／`summary.md`：统计与 Summary 内容。
 - `failure.json`：存在准备／执行辅助错误时的非秘密错误信息。
@@ -116,11 +161,22 @@ Artifact 名称为 `aml-benchmark-<run id>-<attempt>`，保存 30 天，包含�
 超时之前成功的写入仍可能存在，重新点击 Run workflow 使用新 UUID，**不是原运行续跑**。
 workflow 第一版不支持跨 run 自动恢复。需要恢复时下载断点和相同数据，在项目目录
 调用现有 runner 的 `--resume`，保持 kind、数据 SHA256、历史范围、URL、Top K 和原报告
-一致；不要通过删除 journal 或换 request_id 恢复。
+一致；不要通过删除 journal 或换 request_id 恢复。旧 runner version 1 标签契约不能在
+version 2 中续跑，只能保留旧代码恢复；新运行使用新 UUID，避免混用输入版本。
+Answer/Eval 在 Search 完成后先保存 pending 断点，回答已保存时裁判失败不会重复生成
+答案。它需要原始 private cache 才能恢复 pending 问题。CI private cache 在 artifact 目录
+外，不上传模型正文；仅下载 artifact 无法恢复缺少该 cache 的 pending Answer/Eval。
+工作流仍不提供跨 run 自动续跑。
+
+回答／判分的重试、解析、上下文选择版本也进入 evaluation 契约，本次强化之前的
+answer-eval 断点需要使用原 runner 或新开运行，不能混用；retrieval 断点契约不受影响。
+离线 CI 安装 evaluation extra 并用 --no-sync 执行 Ruff／pytest，确保专项模型测试
+具有 tokenizer 依赖；测试使用确定性的本地编码与模拟 HTTP，不调用真实模型。
 
 ## 数据保留与运行成本
 
 新运行按 UUID 和 sample 隔离记忆，不清空其他用户，也不自动删除本运行数据。
+Answer/Eval 的 private cache 也受同一保留期约束，不能随报告公开上传。
 报告按现有保留策略记录清理期限；120 分钟步骤被强制终止、runner 未执行 finally 时，
 最终报告步骤补写未设置的保留期限，不延长已有期限。
 Artifact 过期不清理 Memoria、用户库、journal 或历史快照；物理清理需要独立运维方案。

@@ -10,8 +10,10 @@ conversation histories. It prepares public datasets, writes the original history
 through `/add`, queries `/search`, and records retrieval metrics and run checkpoints.
 It also owns the adapter and its Aliyun dev deployment pipeline.
 
-**Current evaluation mode: retrieval diagnostics.** Answer generation, native
-answer/coding scores, and official AML leaderboard scores are separate work.
+**Default mode: retrieval diagnostics.** LoCoMo and LongMemEval-S also support
+optional local Answer/Eval. Native evaluator parity, coding scores and official
+AML leaderboard scores remain separate acceptance work. See the
+[evaluation guide](agent_memory_leaderboard/benchmarks/EVALUATION.md).
 
 ## Start here
 
@@ -130,6 +132,7 @@ key into the run inputs.
 | Input | First-run value | Meaning |
 |---|---|---|
 | `dataset` | `locomo` | LoCoMo-Refined; `longmemeval` selects LongMemEval-S |
+| `mode` | `retrieval` | Optional `answer-eval` requires separate answer/judge settings |
 | `histories` | `1` | First N complete histories from the pinned dataset; allowed 1–10 |
 | `top_k` | `100` | Retrieval limit; allowed 1–100 |
 | `runtime_label` | Blank | Optional nonsecret backend version note; report only, supplied by the operator |
@@ -167,6 +170,7 @@ for data provenance, metric definitions, timeout and resume behavior.
 | Metric | Range / direction | What it measures |
 |---|---|---|
 | Mean evidence recall | 0–1, higher is better | Average fraction of gold evidence retrieved for labeled questions |
+| Local judge accuracy / Token F1 / BLEU-1 | 0–1, higher is better | Optional Answer/Eval; local scoring, not native evaluator parity |
 | Recall@K | 0–1, higher is better | Evidence recall from the first K returned records of the same Search response; new reports only |
 | All evidence hit rate | 0–1, higher is better | Fraction of labeled questions with all gold evidence retrieved |
 | Empty results | Count | Successful Search requests returning no evidence |
@@ -268,7 +272,7 @@ database bootstrap, selective updates, DNS/certificates, and acceptance checks.
 |---|---|---|
 | [CI - Lint, Tests & Adapter Build](.github/workflows/aml-ci.yml) | Matching PRs/pushes or manual | Lint, tests, workflow/chart validation, adapter image build and Pulumi checks; no Memoria build, live benchmark or deployment |
 | [AML Aliyun dev deployment](.github/workflows/aml-dev-deploy.yml) | Manual; main push when explicitly enabled | Publish images and preview/update the dev stack |
-| [AML benchmark](.github/workflows/aml-benchmark.yml) | Manual, main only | Call deployed Add/Search and publish retrieval reports |
+| [AML benchmark](.github/workflows/aml-benchmark.yml) | Manual, main only | Call deployed Add/Search; optional local Answer/Eval; publish reports |
 
 ## Repository layout
 

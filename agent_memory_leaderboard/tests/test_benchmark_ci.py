@@ -157,3 +157,44 @@ def test_summary_renders_missing_version_and_history_breakdown(tmp_path, monkeyp
     assert ("### Recall of returned evidence prefixes" in markdown) == (prefixes is not None)
     if prefixes is None:
         assert "Prefix recall is unavailable" in markdown
+
+
+def test_summary_exposes_partial_scoring_coverage_and_failures(tmp_path, monkeypatch):
+    workspace(tmp_path, monkeypatch)
+    ci.write_json(ci.SELECTION, {"histories": 1, "top_k": 100, "mode": "answer-eval"})
+    ci.write_json(
+        ci.REPORT,
+        {
+            "contract": {"kind": "locomo", "conversations": ["sample"]},
+            "mode": "answer-eval",
+            "status": "partial",
+            "completed_adds": [],
+            "questions": {
+                "q1": {
+                    "sample_id": "sample",
+                    "evaluation_pending": True,
+                    "evaluation_status": "judge_failed",
+                    "evaluation": {"token_f1": 0.5},
+                },
+                "q2": {
+                    "sample_id": "sample",
+                    "evaluation_status": "completed",
+                    "evaluation": {"local_judge_score": 1, "token_f1": 1},
+                },
+            },
+        },
+    )
+    ci.summary()
+    result = json.loads((tmp_path / "summary.json").read_text())
+    assert result["metrics"]["evaluation_coverage"] == 0.5
+    assert result["metrics"]["judge_failed_questions"] == 1
+    markdown = (tmp_path / "summary.md").read_text()
+    for text in (
+        "partial",
+        "Scoring coverage",
+        "0.5",
+        "Answer failures / judge failures",
+        "0 / 1",
+        "not a complete quality baseline",
+    ):
+        assert text in markdown

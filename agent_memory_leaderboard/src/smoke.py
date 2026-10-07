@@ -10,23 +10,56 @@ from urllib.parse import quote
 import httpx
 
 from .config import Settings
+from .diagnostics import adapter_reason_code
 from .service import digest
 
 
-def call_adapter(http: httpx.Client, adapter_url: str, headers: dict, path: str, body: dict):
-    """Use the published route-specific retry sets, bounded to six smoke attempts."""
+def call_adapter(
+    http: httpx.Client,
+    adapter_url: str,
+    headers: dict,
+    path: str,
+    body: dict,
+    *,
+    observe=None,
+):
+    """Published retry sets; an optional observer receives only fixed diagnostics."""
     retryable = {408, 425, 429, 500, 502, 503, 504}
     if path == "/add":
         retryable |= {409, 524}
     for attempt in range(6):
         delay = min(2**attempt / 4, 2)
+        start = time.monotonic()
         try:
             response = http.post(adapter_url.rstrip("/") + path, headers=headers, json=body)
         except httpx.RequestError:
+            if observe:
+                observe(
+                    {
+                        "route": path,
+                        "attempt": attempt + 1,
+                        "status": "transport",
+                        "reason": "transport_error",
+                        "will_retry": attempt < 5,
+                        "elapsed_seconds": time.monotonic() - start,
+                    }
+                )
             if attempt == 5:
                 raise
         else:
-            if response.status_code not in retryable or attempt == 5:
+            will_retry = response.status_code in retryable and attempt < 5
+            if observe:
+                observe(
+                    {
+                        "route": path,
+                        "attempt": attempt + 1,
+                        "status": response.status_code,
+                        "reason": adapter_reason_code(response) or "unclassified",
+                        "will_retry": will_retry,
+                        "elapsed_seconds": time.monotonic() - start,
+                    }
+                )
+            if not will_retry:
                 response.raise_for_status()
                 assert response.status_code == 200, f"{path} must return 200"
                 return response.json()

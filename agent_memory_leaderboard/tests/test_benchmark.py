@@ -27,7 +27,7 @@ def test_ingestion_keeps_source_order_and_does_not_include_annotations():
     result = list(batches(conversation))
     assert [r[0] for r in result] == ["session_2", "session_10"]
     assert "NEVER INGEST" not in str(result)
-    assert "[dialogue:D2:1] [earlier date] A: Earlier" == result[0][2][0]["content"]
+    assert "[earlier date] A: Earlier" == result[0][2][0]["content"]
 
 
 def test_batches_preserve_every_message_at_boundaries():
@@ -100,7 +100,7 @@ def test_longmemeval_strips_gold_and_preserves_roles_and_history():
     assert "GOLD" not in str(ingested) and "has_answer" not in str(ingested)
     assert len(ingested) == 2
     assert ingested[1][2][0]["role"] == "assistant"
-    assert converted["qa"][0]["evidence"] == ["s2"]
+    assert converted["qa"][0]["evidence"] == ["S2"]
     sample["question_id"] = "q1_abs"
     assert normalize([sample], "longmemeval")[0]["qa"][0]["evidence"] == []
 
@@ -155,7 +155,7 @@ def test_failed_ingestion_never_searches_and_resume_reuses_ids(
         if request.url.path == "/search":
             assert body["query"] == "original query"
             return httpx.Response(200, json={"data": [
-                {"id": "memory", "content": "[dialogue:D1:1] original fact"}]})
+                {"id": "memory", "content": "[user]\n[date] A: original fact"}]})
         return httpx.Response(200, json={"status": "ok"})
 
     client = httpx.Client
@@ -182,7 +182,7 @@ def test_failed_ingestion_never_searches_and_resume_reuses_ids(
     assert question["retrieved_evidence_ids"] == ["D1:1"]
     assert question["unmatched_gold_evidence"] == unmatched
     assert question["evidence_recall_at_k"] == {"1": score}
-    assert report["question_audit_version"] == 1
+    assert report["question_audit_version"] == 2
     assert sum(path == "/search" for path, body in calls) == 1
 
 
