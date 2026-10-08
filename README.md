@@ -125,29 +125,41 @@ semantics, see the [adapter guide](agent_memory_leaderboard/README.md#retries-an
 
 ## Run a benchmark
 
-Open **Actions → AML benchmark → Run workflow** and select the `main` branch.
-The workflow uses the configured `AML_ADAPTER_API_KEY` Secret; you do not paste a
-key into the run inputs.
+Open **Actions → AML benchmark (QA / Aliyun dev) → Run workflow** and select `main`.
+Choose the target explicitly. QA uses `AML_QA_ADAPTER_API_KEY`; Aliyun dev uses
+`AML_ADAPTER_API_KEY`. Keys are repository Secrets, never workflow inputs.
 
 | Input | First-run value | Meaning |
 |---|---|---|
+| `target_environment` | `qa` | Explicitly select QA; the compatibility default remains `aliyun-dev` |
+| `profile` | `minimal` | LoCoMo first session / two text questions for connectivity; `histories` evaluates complete histories |
 | `dataset` | `locomo` | LoCoMo-Refined; `longmemeval` selects LongMemEval-S |
 | `mode` | `retrieval` | Optional `answer-eval` requires separate answer/judge settings |
 | `histories` | `1` | First N complete histories from the pinned dataset; allowed 1–10 |
 | `top_k` | `100` | Retrieval limit; allowed 1–100 |
 | `runtime_label` | Blank | Optional nonsecret backend version note; report only, supplied by the operator |
 
-One history can contain many sessions, messages, and questions. The full selected
+In the `histories` profile, one history can contain many sessions, messages, and
+questions. The full selected
 history is written before querying it; `histories=1` does not mean one question.
-Start with one history, then increase the scope after checking resource use.
+Start with the LoCoMo `minimal` profile, then use `histories` with one complete
+history after checking resource use. Minimal-profile scores are not a quality baseline.
 
 The workflow pins data revisions and verifies file size and SHA256. Its backend
 label is optional, operator supplied, and **not automatically verified** against the live
 service. Leaving it blank records `null` and displays **Not recorded** in the summary.
-It does not select or deploy a backend: the benchmark calls the currently deployed
-Add/Search endpoint at `https://aml.cn-dev.matrixone.tech`.
-It shares a concurrency group with deployment to prevent workflow-based
-updates during the benchmark; external clients still require team coordination.
+It does not deploy a backend. The selected target maps to a fixed address:
+
+| Target | Endpoint |
+|---|---|
+| `qa` | `https://aml-qa.moi.shanghai.idc.matrixorigin.cn:30443` |
+| `aliyun-dev` | `https://aml.cn-dev.matrixone.tech` |
+
+QA runs are serialized within this repository. QA deployment is owned by
+[moi-gitops](https://github.com/matrixorigin/moi-gitops/pull/810), whose concurrency
+lock is independent; coordinate its releases before evaluating. Dev retains its
+shared deployment/benchmark lock. Reachability from a workstation does not prove
+GitHub-hosted runner or official AML reachability. Readiness is checked before ingestion.
 
 After the run:
 
@@ -274,7 +286,7 @@ database bootstrap, selective updates, DNS/certificates, and acceptance checks.
 |---|---|---|
 | [CI - Lint, Tests & Adapter Build](.github/workflows/aml-ci.yml) | Matching PRs/pushes or manual | Lint, tests, workflow/chart validation, adapter image build and Pulumi checks; no Memoria build, live benchmark or deployment |
 | [AML Aliyun dev deployment](.github/workflows/aml-dev-deploy.yml) | Manual; main push when explicitly enabled | Publish images and preview/update the dev stack |
-| [AML benchmark](.github/workflows/aml-benchmark.yml) | Manual, main only | Call deployed Add/Search; optional local Answer/Eval; publish reports |
+| [AML benchmark (QA / Aliyun dev)](.github/workflows/aml-benchmark.yml) | Manual, main only | Call deployed Add/Search; optional local Answer/Eval; publish reports |
 
 ## Repository layout
 

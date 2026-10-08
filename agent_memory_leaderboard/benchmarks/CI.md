@@ -2,39 +2,47 @@
 
 ## 范围
 
-**AML benchmark** 手动调用已部署的阿里云 dev Add/Search，运行公开数据的检索评测或可选的本地 Answer/Eval。
+**AML benchmark (QA / Aliyun dev)** 手动调用显式选择的 QA 或阿里云 dev Add/Search，运行公开数据的检索评测或可选的本地 Answer/Eval。
 第一版可选择 **LoCoMo-Refined** 和 **LongMemEval-S**，复用 `src/benchmark.py`；
 不会重新部署服务，也不会启动 AML 官方 Smoke／Full。默认 `retrieval` 不调用回答／裁判模型；
 `answer-eval` 调用独立配置的模型，详见[评测与诊断](EVALUATION.md)。
 默认检索模式不需要 LLM；两种模式均不需要 Memoria master key、数据库、kubeconfig 或 Pulumi 凭据。
-Add/Search 使用本仓库已有的 `AML_ADAPTER_API_KEY`，仅传入实际执行步骤，并映射为
-runner 读取的 `ADAPTER_API_KEY`。
+QA 使用仓库 Secret `AML_QA_ADAPTER_API_KEY`，dev 使用已有的 `AML_ADAPTER_API_KEY`。
+workflow 选择 Secret 名称后仅将对应值映射为 runner 的 `ADAPTER_API_KEY`；
+QA key 缺失时不会回退到 dev key。当前账号无 Environment 管理权限，采用独立命名的
+仓库 Secret，发布仍限制为手动触发 main。评测不需要集群或后端管理凭据。
 
 ## 如何运行
 
 合并包含 `.github/workflows/aml-benchmark.yml` 的变更后：
 
-1. 确认 dev 服务已部署，并与团队协调评测负载；流程不会自动开启或解除发布冻结。
-2. 进入本仓库 **Actions → AML benchmark → Run workflow**。
+1. 确认所选目标服务已部署，并与团队协调评测负载；流程不会自动开启或解除发布冻结。
+2. 进入本仓库 **Actions → AML benchmark (QA / Aliyun dev) → Run workflow**。
 3. workflow 分支选择 **main**，填写以下参数。
 4. 运行结束后打开该 run 的 **Summary**，查看指标并下载 **Artifacts**。
 
 | 参数 | 默认值／填写方法 |
 |---|---|
+| `target_environment` | 兼容默认 `aliyun-dev`；测试 QA 时显式选 `qa`，地址和 key 配套选择 |
+| `profile` | 默认 `histories`（完整历史）；首次 QA 建议 `minimal`（仅 LoCoMo，要求 histories=1） |
 | `dataset` | 默认 `locomo`；`longmemeval` 指 LongMemEval-S，不是 Refined |
 | `mode` | 默认 `retrieval`；可选 `answer-eval`，需要下列模型配置 |
 | `histories` | 默认 `1`，允许 `1–10`；选定数据版本的前 N 个完整历史，不是问题数 |
 | `top_k` | 默认 `100`，允许 `1–100` |
 | `runtime_label` | 可选非秘密版本备注，默认留空；可填实际部署的 Memoria commit／镜像 digest 和适配器版本，最多 200 字符，不要填 key 或连接串；仅用于报告 |
 
-第一次建议选 `locomo`、`histories=1`、`top_k=100`。所有选中历史内容先写入，随后查询
+第一次 QA 建议选 `target_environment=qa`、`profile=minimal`、`dataset=locomo`、
+`histories=1`、`top_k=100`。最小档先校验完整的固定原始文件，再确定性提取第一个
+完整 session 与原始顺序中证据全部位于该 session 的前两道文本题，保留原文、来源日期
+和说话人；如果不足两题则在写入前停止。派生输入另记 SHA256。它只验证链路，
+其分数不与完整历史基线比较。通过后切换 `profile=histories`；该档所有选中历史内容先写入，随后查询
 该历史的问题；多模态问题按现有 runner 跳过，不为缩短耗时删去历史内容。
 LongMemEval-S 也从 `histories=1` 开始；它通常每个历史只有一道问题，但历史可能很长。
 当前输入上限允许 LoCoMo 的 10 个完整历史，不允许通过本 workflow 运行 LongMemEval-S
 全部 500 个历史。两种数据的工作量不能按相同 histories 数量推算。
 
-目标固定为 `https://aml.cn-dev.matrixone.tech`，不能输入任意外部 URL，避免把部署的访问
-key 发往其他服务。手动触发仅接受本仓库 main；不会通过 PR／push／schedule 自动执行。
+目标地址为固定映射：`qa` → `https://aml-qa.moi.shanghai.idc.matrixorigin.cn:30443`，
+`aliyun-dev` → `https://aml.cn-dev.matrixone.tech`。不能输入任意外部 URL，避免把访问 key 发往其他服务。手动触发仅接受本仓库 main；不会通过 PR／push／schedule 自动执行。
 其他数据集后续通过新增固定来源、准备步骤和必要的评分支持接入同一 workflow。
 
 ## 数据与版本
@@ -51,9 +59,11 @@ LoCoMo 原始文件约 2.75 MB，LongMemEval-S 约 277 MB；小集仍下载完�
 版本说明。后端说明可选，由操作者填写，**不是自动读取或验证的在线镜像版本**。
 留空仍可正常运行，JSON 记录 `null`，Summary 显示 `Not recorded`（版本未记录）；
 版本比较时应从最近实际部署记录取得准确来源。此字段不选择、构建或部署服务，
-benchmark 始终请求 `https://aml.cn-dev.matrixone.tech` 当前部署的 Add/Search。
-workflow 与 CD 使用同一并发组
-`aml-aliyun-unit-new-dev`，防止通过这两个入口在评测过程中更新应用。
+benchmark 请求所选环境当前部署的 Add/Search；Summary 与 JSON 记录环境、地址和 profile。
+dev workflow 与 CD 使用同一并发组 `aml-aliyun-unit-new-dev`。QA 使用 `aml-qa-benchmark`
+只串行本仓库的 QA 评测；moi-gitops 在另一个仓库，同名 concurrency group 也不能跨仓库互斥。
+QA 评测前需要协调共享 Memoria 与 GitOps 发布；本 workflow 不宣称已自动冻结它们。
+QA gateway 初始限制一个活跃业务请求、每秒一个后端业务请求，完整历史可能明显慢于 dev。
 并发组不阻止其他本地客户端、AML 官方任务或手工操作；GitHub 默认只保留一个 pending
 运行，新 pending 可能替换旧 pending，不应同时排队多个部署／评测任务。
 
@@ -170,7 +180,7 @@ Summary 同时显示这些数量。新契约与旧标签版本不同，必须重
 
 Artifact 名称为 `aml-benchmark-<run id>-<attempt>`，保存 30 天，包含：
 
-- `selection.json`：固定数据来源、输入和版本信息。
+- `selection.json`：固定数据来源、目标环境／URL、profile、派生最小输入 SHA256 和版本信息。
 - `run.json`：运行中的小型 header，结束时包含完整问题结果、随机 run ID 和用户列表。
 - `run.questions/`：逐题原子保存的增量断点；硬中断后的报告／续跑需要一起保留。
 - `run.sources/`：本地来源 ID／内容 hash 映射，无正文或 gold answer。
