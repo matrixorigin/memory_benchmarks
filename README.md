@@ -50,14 +50,14 @@ flowchart LR
 - **GitHub Actions runner:** the machine that executes that program. Deployment,
   offline checks, and live benchmarks have separate workflows.
 
-The dev deployment runs one adapter Pod and one dedicated Memoria Pod, with a
-persistent journal, NGINX Ingress, and cert-manager TLS. MatrixOne and embedding
+QA runs one adapter Pod with a persistent journal, NGINX Ingress and TLS,
+reusing the shared QA Memoria service. MatrixOne and embedding
 capacity are shared infrastructure. Astra is optional for future answer/judge work.
 
 ## Try the deployed API
 
-The dev endpoint is **`https://aml.cn-dev.matrixone.tech`**. Obtain
-`AML_ADAPTER_API_KEY` from the environment maintainer through a private channel.
+The QA endpoint is **`https://aml-qa.moi.shanghai.idc.matrixorigin.cn:30443`**. Obtain
+the QA adapter key from the environment maintainer through a private channel.
 API clients use this adapter key; backend and deployment credentials stay with
 the operators.
 
@@ -67,7 +67,7 @@ The example uses curl and Python 3 to generate a fresh test user. Replace the ke
 placeholder before running; keep the same user for Add and Search.
 
 ```sh
-export AML_BASE_URL='https://aml.cn-dev.matrixone.tech'
+export AML_BASE_URL='https://aml-qa.moi.shanghai.idc.matrixorigin.cn:30443'
 export AML_ADAPTER_API_KEY='<your-adapter-access-key>'
 export AML_DEMO_USER="aml-demo-$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 
@@ -125,13 +125,12 @@ semantics, see the [adapter guide](agent_memory_leaderboard/README.md#retries-an
 
 ## Run a benchmark
 
-Open **Actions → AML benchmark (QA / Aliyun dev) → Run workflow** and select `main`.
-Choose the target explicitly. QA uses `AML_QA_ADAPTER_API_KEY`; Aliyun dev uses
-`AML_ADAPTER_API_KEY`. Keys are repository Secrets, never workflow inputs.
+Open **Actions → QA memory benchmark → Run workflow** and select `main`.
+The workflow only calls QA and uses repository Secret `AML_QA_ADAPTER_API_KEY`;
+you do not paste a key or choose an environment in the run inputs.
 
 | Input | First-run value | Meaning |
 |---|---|---|
-| `target_environment` | `qa` | Explicitly select QA; the compatibility default remains `aliyun-dev` |
 | `profile` | `minimal` | LoCoMo first session / two text questions for connectivity; `histories` evaluates complete histories |
 | `dataset` | `locomo` | LoCoMo-Refined; `longmemeval` selects LongMemEval-S |
 | `mode` | `retrieval` | Optional `answer-eval` requires separate answer/judge settings |
@@ -148,18 +147,13 @@ history after checking resource use. Minimal-profile scores are not a quality ba
 The workflow pins data revisions and verifies file size and SHA256. Its backend
 label is optional, operator supplied, and **not automatically verified** against the live
 service. Leaving it blank records `null` and displays **Not recorded** in the summary.
-It does not deploy a backend. The selected target maps to a fixed address:
-
-| Target | Endpoint |
-|---|---|
-| `qa` | `https://aml-qa.moi.shanghai.idc.matrixorigin.cn:30443` |
-| `aliyun-dev` | `https://aml.cn-dev.matrixone.tech` |
-
+It does not deploy a backend. It calls the QA endpoint
+`https://aml-qa.moi.shanghai.idc.matrixorigin.cn:30443` exclusively.
 QA runs are serialized within this repository. QA deployment is owned by
 [moi-gitops](https://github.com/matrixorigin/moi-gitops/pull/810), whose concurrency
-lock is independent; coordinate its releases before evaluating. Dev retains its
-shared deployment/benchmark lock. Reachability from a workstation does not prove
-GitHub-hosted runner or official AML reachability. Readiness is checked before ingestion.
+lock is independent; coordinate its releases before evaluating. Reachability from
+a workstation does not prove GitHub-hosted runner or official AML reachability.
+Readiness is checked before ingestion.
 
 After the run:
 
@@ -251,42 +245,24 @@ local integration smoke, benchmark commands, and a Memoria Docker Compose overla
 
 ## Deploy or update services
 
-Use **Actions → AML Aliyun dev deployment → Run workflow**, branch `main`.
+QA services are managed in **moi-gitops**, stack `idc`: the `aml-qa` unit owns the
+adapter and the `memoria` unit owns shared Memoria. See the
+[QA deployment handbook](https://github.com/matrixorigin/moi-gitops/blob/main/docs/handbooks/qa-aml-adapter.md).
+The old Aliyun direct-deployment workflow has been removed. This repository's
+active CI/benchmark workflows do not deploy to Aliyun or require its cluster,
+SQL or Memoria administration credentials. Legacy deployment code and its
+[reference guide](deploy/README.md) remain for historical reference.
 
-| Setting | Options / behavior |
-|---|---|
-| `operation` | `preview` previews resource changes; `deploy` applies them |
-| `deployment_target` | `both`, `memoria`, or `memory_benchmarks` (the adapter) |
-| `memoria_build_mode` | `source`, `image`, or `configured` (uses configured mode) |
-| `memoria_ref` | Memoria branch, tag, or SHA; blank uses configured ref, default `main` |
-
-Memoria defaults to a source build from `matrixorigin/memoria/main`; the actual
-checkout commit is recorded, and deployment uses the image digest. Initial
-deployment needs `both`; single-service updates retain the unselected service's
-deployed image and configuration. Shared credential/configuration changes need
-`both`. Updates use Recreate and can interrupt requests.
-
-Memoria source builds run only in this deployment workflow when the target is
-`both` or `memoria` and the resolved mode is `source`. Adapter-only updates and
-`image` mode skip Memoria builds. Ordinary PRs and merges do not build Memoria
-in offline CI; a main push can still build it if automatic deployment is enabled.
-
-The workflow manages the dedicated `memory-benchmarks/new-dev` Pulumi stack and
-`aml-memory-benchmarks` namespace. Operators configure the dedicated SQL account,
-runtime credentials, ACR access, cluster identity, ingress, and TLS issuer.
-Automatic deployment is off by default; formal evaluation requires a release
-freeze. Preview also builds/pushes images and can initialize an empty stack.
-
-See [deployment setup and operations](deploy/README.md) for Secret/Variable setup,
-database bootstrap, selective updates, DNS/certificates, and acceptance checks.
+The adapter image build → moi-gitops image-update PR workflow is follow-up work.
+ACR still hosts the application images, and the configured qwen-plus answer/judge
+service still uses DashScope. These dependencies are separate from hosting QA.
 
 ## Workflows at a glance
 
 | Workflow | Trigger | Result |
 |---|---|---|
 | [CI - Lint, Tests & Adapter Build](.github/workflows/aml-ci.yml) | Matching PRs/pushes or manual | Lint, tests, workflow/chart validation, adapter image build and Pulumi checks; no Memoria build, live benchmark or deployment |
-| [AML Aliyun dev deployment](.github/workflows/aml-dev-deploy.yml) | Manual; main push when explicitly enabled | Publish images and preview/update the dev stack |
-| [AML benchmark (QA / Aliyun dev)](.github/workflows/aml-benchmark.yml) | Manual, main only | Call deployed Add/Search; optional local Answer/Eval; publish reports |
+| [QA memory benchmark](.github/workflows/aml-benchmark.yml) | Manual, main only | Call deployed Add/Search; optional local Answer/Eval; publish reports |
 
 ## Repository layout
 

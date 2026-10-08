@@ -236,7 +236,7 @@ that configuring embeddings alone resolves the observed failure without testing.
 
 ## Public LoCoMo-Refined retrieval test
 
-For a manual run against QA or Aliyun dev, use **AML benchmark (QA / Aliyun dev)**
+For a manual run against QA, use **QA memory benchmark**
 in GitHub Actions. It supports LoCoMo-Refined and LongMemEval-S, defaults to one
 complete history, and publishes metrics to the run Summary. See
 [workflow inputs, artifacts, metrics and retention](benchmarks/CI.md).

@@ -1,13 +1,8 @@
-name: AML benchmark (QA / Aliyun dev)
+name: QA memory benchmark
 
 on:
   workflow_dispatch:
     inputs:
-      target_environment:
-        description: Deployed adapter to evaluate (address and key are selected together)
-        type: choice
-        options: [aliyun-dev, qa]
-        default: aliyun-dev
       profile:
         description: Complete histories, or a LoCoMo-only minimal connectivity check
         type: choice
@@ -39,10 +34,9 @@ on:
 permissions:
   contents: read
 
-# Dev shares its deployment lock. QA serializes benchmark runs only; GitOps
-# releases are in another repository and require separate coordination.
+# GitOps releases are in another repository and require separate coordination.
 concurrency:
-  group: ${{ inputs.target_environment == 'qa' && 'aml-qa-benchmark' || 'aml-aliyun-unit-new-dev' }}
+  group: aml-qa-benchmark
   cancel-in-progress: false
 
 jobs:
@@ -61,7 +55,7 @@ jobs:
         id: prepare
         timeout-minutes: 15
         env:
-          AML_BENCHMARK_TARGET: ${{ inputs.target_environment || 'aliyun-dev' }}
+          AML_BENCHMARK_TARGET: qa
           AML_BENCHMARK_PROFILE: ${{ inputs.profile || 'histories' }}
           AML_BENCHMARK_DATASET: ${{ inputs.dataset }}
           AML_BENCHMARK_MODE: ${{ inputs.mode }}
@@ -81,8 +75,7 @@ jobs:
         id: execute
         timeout-minutes: 120
         env:
-          # Select the secret name, so a missing QA key cannot fall back to dev.
-          ADAPTER_API_KEY: ${{ secrets[inputs.target_environment == 'qa' && 'AML_QA_ADAPTER_API_KEY' || 'AML_ADAPTER_API_KEY'] }}
+          ADAPTER_API_KEY: ${{ secrets.AML_QA_ADAPTER_API_KEY }}
           BENCHMARK_ANSWER_MODEL: ${{ vars.AML_BENCHMARK_ANSWER_MODEL }}
           BENCHMARK_ANSWER_BASE_URL: ${{ vars.AML_BENCHMARK_ANSWER_BASE_URL }}
           BENCHMARK_ANSWER_API_KEY: ${{ secrets.AML_BENCHMARK_ANSWER_API_KEY }}

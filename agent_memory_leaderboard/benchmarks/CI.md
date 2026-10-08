@@ -2,14 +2,13 @@
 
 ## 范围
 
-**AML benchmark (QA / Aliyun dev)** 手动调用显式选择的 QA 或阿里云 dev Add/Search，运行公开数据的检索评测或可选的本地 Answer/Eval。
+**QA memory benchmark** 手动调用 QA Add/Search，运行公开数据的检索评测或可选的本地 Answer/Eval。
 第一版可选择 **LoCoMo-Refined** 和 **LongMemEval-S**，复用 `src/benchmark.py`；
 不会重新部署服务，也不会启动 AML 官方 Smoke／Full。默认 `retrieval` 不调用回答／裁判模型；
 `answer-eval` 调用独立配置的模型，详见[评测与诊断](EVALUATION.md)。
 默认检索模式不需要 LLM；两种模式均不需要 Memoria master key、数据库、kubeconfig 或 Pulumi 凭据。
-QA 使用仓库 Secret `AML_QA_ADAPTER_API_KEY`，dev 使用已有的 `AML_ADAPTER_API_KEY`。
-workflow 选择 Secret 名称后仅将对应值映射为 runner 的 `ADAPTER_API_KEY`；
-QA key 缺失时不会回退到 dev key。当前账号无 Environment 管理权限，采用独立命名的
+QA 使用仓库 Secret `AML_QA_ADAPTER_API_KEY`，仅在执行步骤映射为 runner 的
+`ADAPTER_API_KEY`。旧 dev key 不被活动 benchmark workflow 引用。当前账号无 Environment 管理权限，采用独立命名的
 仓库 Secret，发布仍限制为手动触发 main。评测不需要集群或后端管理凭据。
 
 ## 如何运行
@@ -17,13 +16,12 @@ QA key 缺失时不会回退到 dev key。当前账号无 Environment 管理权�
 合并包含 `.github/workflows/aml-benchmark.yml` 的变更后：
 
 1. 确认所选目标服务已部署，并与团队协调评测负载；流程不会自动开启或解除发布冻结。
-2. 进入本仓库 **Actions → AML benchmark (QA / Aliyun dev) → Run workflow**。
+2. 进入本仓库 **Actions → QA memory benchmark → Run workflow**。
 3. workflow 分支选择 **main**，填写以下参数。
 4. 运行结束后打开该 run 的 **Summary**，查看指标并下载 **Artifacts**。
 
 | 参数 | 默认值／填写方法 |
 |---|---|
-| `target_environment` | 兼容默认 `aliyun-dev`；测试 QA 时显式选 `qa`，地址和 key 配套选择 |
 | `profile` | 默认 `histories`（完整历史）；首次 QA 建议 `minimal`（仅 LoCoMo，要求 histories=1） |
 | `dataset` | 默认 `locomo`；`longmemeval` 指 LongMemEval-S，不是 Refined |
 | `mode` | 默认 `retrieval`；可选 `answer-eval`，需要下列模型配置 |
@@ -31,7 +29,7 @@ QA key 缺失时不会回退到 dev key。当前账号无 Environment 管理权�
 | `top_k` | 默认 `100`，允许 `1–100` |
 | `runtime_label` | 可选非秘密版本备注，默认留空；可填实际部署的 Memoria commit／镜像 digest 和适配器版本，最多 200 字符，不要填 key 或连接串；仅用于报告 |
 
-第一次 QA 建议选 `target_environment=qa`、`profile=minimal`、`dataset=locomo`、
+第一次建议选 `profile=minimal`、`dataset=locomo`、
 `histories=1`、`top_k=100`。最小档先校验完整的固定原始文件，再确定性提取第一个
 完整 session 与原始顺序中证据全部位于该 session 的前两道文本题，保留原文、来源日期
 和说话人；如果不足两题则在写入前停止。派生输入另记 SHA256。它只验证链路，
@@ -41,8 +39,8 @@ LongMemEval-S 也从 `histories=1` 开始；它通常每个历史只有一道问
 当前输入上限允许 LoCoMo 的 10 个完整历史，不允许通过本 workflow 运行 LongMemEval-S
 全部 500 个历史。两种数据的工作量不能按相同 histories 数量推算。
 
-目标地址为固定映射：`qa` → `https://aml-qa.moi.shanghai.idc.matrixorigin.cn:30443`，
-`aliyun-dev` → `https://aml.cn-dev.matrixone.tech`。不能输入任意外部 URL，避免把访问 key 发往其他服务。手动触发仅接受本仓库 main；不会通过 PR／push／schedule 自动执行。
+目标固定为 QA：`https://aml-qa.moi.shanghai.idc.matrixorigin.cn:30443`。
+不提供旧阿里云 dev 选项或任意 URL 输入。手动触发仅接受本仓库 main；不会通过 PR／push／schedule 自动执行。
 其他数据集后续通过新增固定来源、准备步骤和必要的评分支持接入同一 workflow。
 
 ## 数据与版本
@@ -59,8 +57,8 @@ LoCoMo 原始文件约 2.75 MB，LongMemEval-S 约 277 MB；小集仍下载完�
 版本说明。后端说明可选，由操作者填写，**不是自动读取或验证的在线镜像版本**。
 留空仍可正常运行，JSON 记录 `null`，Summary 显示 `Not recorded`（版本未记录）；
 版本比较时应从最近实际部署记录取得准确来源。此字段不选择、构建或部署服务，
-benchmark 请求所选环境当前部署的 Add/Search；Summary 与 JSON 记录环境、地址和 profile。
-dev workflow 与 CD 使用同一并发组 `aml-aliyun-unit-new-dev`。QA 使用 `aml-qa-benchmark`
+benchmark 请求 QA 当前部署的 Add/Search；Summary 与 JSON 记录环境、地址和 profile。
+旧阿里云部署 workflow 已移除。QA 使用 `aml-qa-benchmark`
 只串行本仓库的 QA 评测；moi-gitops 在另一个仓库，同名 concurrency group 也不能跨仓库互斥。
 QA 评测前需要协调共享 Memoria 与 GitOps 发布；本 workflow 不宣称已自动冻结它们。
 QA gateway 初始限制一个活跃业务请求、每秒一个后端业务请求，完整历史可能明显慢于 dev。
@@ -217,3 +215,21 @@ Artifact 过期不清理 Memoria、用户库、journal 或历史快照；物理�
 该 workflow 消耗我们自己的 embedding、数据库和 Actions 资源，不消耗 AML 官方 Full
 配额。请求串行发送；限制 histories 和执行时长不等于完整的全局 QPS／token 预算。
 不要同时开启多个独立客户端；更大范围运行前先从小集测量容量。
+
+## 本地与 CI 凭据边界
+
+| 用途 | 本地变量 | GitHub Repository Secret |
+|---|---|---|
+| QA Add/Search | `ADAPTER_API_KEY` | `AML_QA_ADAPTER_API_KEY` |
+| 作答（仅 answer-eval） | `BENCHMARK_ANSWER_API_KEY` | `AML_BENCHMARK_ANSWER_API_KEY` |
+| 判分（仅 answer-eval） | `BENCHMARK_JUDGE_API_KEY` | `AML_BENCHMARK_JUDGE_API_KEY` |
+
+本地完整 QA 配置保存在私有 `var/evaluation-qa.env`（当前独立 worktree 下），权限 0600、
+Git 忽略；模型名和 base URL 也已配置。GitHub 的上述三个 Secret 已配置，模型变量沿用
+qwen-plus / DashScope。本地真实 QA 最小链路已通过；GitHub-hosted runner 的端到端执行
+需在本 PR 合入后首次运行验证，Secret 已存在不等于运行已验证。
+
+离线 CI 不使用任何业务 key。评测不需要 KUBECONFIG、Pulumi token、数据库密码、
+Memoria master key 或 embedding key；这些由 QA 后端和 GitOps 持有。当前服务运行于
+QA IDC，但 qwen-plus API 与 ACR 镜像仓库仍是阿里云提供的外部服务；移除阿里云集群
+部署不等于替换这些依赖。只有选择 answer-eval 才从 runner 调用 DashScope。

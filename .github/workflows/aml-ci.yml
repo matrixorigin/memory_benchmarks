@@ -2,10 +2,10 @@ name: CI - Lint, Tests & Adapter Build
 
 on:
   pull_request:
-    paths: ['agent_memory_leaderboard/**', 'deploy/**', '.github/workflows/aml-ci.yml', '.github/workflows/aml-dev-deploy.yml', '.github/workflows/aml-benchmark.yml']
+    paths: ['agent_memory_leaderboard/**', 'deploy/**', '.github/workflows/aml-ci.yml', '.github/workflows/aml-benchmark.yml']
   push:
     branches: [main]
-    paths: ['agent_memory_leaderboard/**', 'deploy/**', '.github/workflows/aml-ci.yml', '.github/workflows/aml-dev-deploy.yml', '.github/workflows/aml-benchmark.yml']
+    paths: ['agent_memory_leaderboard/**', 'deploy/**', '.github/workflows/aml-ci.yml', '.github/workflows/aml-benchmark.yml']
   workflow_dispatch:
 
 permissions:

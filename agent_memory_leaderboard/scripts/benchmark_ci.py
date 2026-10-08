@@ -27,11 +27,7 @@ REPORT = RESULTS / "run.json"
 DATA = WORK / "input.json"
 MINIMAL_DATA = WORK / "minimal-input.json"
 CATALOG = ROOT / "benchmarks" / "ci-datasets.json"
-ADAPTER_URL = "https://aml.cn-dev.matrixone.tech"
-TARGETS = {
-    "aliyun-dev": ADAPTER_URL,
-    "qa": "https://aml-qa.moi.shanghai.idc.matrixorigin.cn:30443",
-}
+ADAPTER_URL = "https://aml-qa.moi.shanghai.idc.matrixorigin.cn:30443"
 
 
 class BenchmarkError(ValueError):
@@ -66,9 +62,11 @@ def file_hash(path):
 
 
 def prepare():
-    target = os.getenv("AML_BENCHMARK_TARGET", "aliyun-dev")
-    if target not in TARGETS:
-        raise BenchmarkError("Choose qa or aliyun-dev; arbitrary adapter URLs are not accepted")
+    target = os.getenv("AML_BENCHMARK_TARGET", "qa")
+    if target != "qa":
+        raise BenchmarkError(
+            "Only the QA target is supported; arbitrary adapter URLs are not accepted"
+        )
     profile = os.getenv("AML_BENCHMARK_PROFILE", "histories")
     if profile not in {"histories", "minimal"}:
         raise BenchmarkError("Choose histories or minimal profile")
@@ -99,7 +97,7 @@ def prepare():
         "top_k": top_k,
         "target_environment": target,
         "profile": profile,
-        "adapter_url": TARGETS[target],
+        "adapter_url": ADAPTER_URL,
         "runtime_label": label or None,
         "backend_revision_verified": False,
         "benchmark_commit": os.getenv("GITHUB_SHA", "local"),
@@ -392,7 +390,7 @@ def summary():
         "histories": histories,
         "unassigned_questions": unassigned,
         "official_aml_score": False,
-        "target_environment": selection.get("target_environment", "aliyun-dev"),
+        "target_environment": selection.get("target_environment", "not_recorded"),
         "adapter_url": selection.get("adapter_url"),
         "profile": selection.get("profile", "histories"),
         "request_diagnostics": diagnostics,
