@@ -1,7 +1,9 @@
-# 阿里云 dev 发布
+# 历史阿里云 dev 发布参考
 
-本目录在阿里云 **dev unit 集群**部署专用 Memoria 和 AML Add/Search 适配器。
-CI/CD、Helm chart 和 Pulumi 程序全部在 `memory_benchmarks` 维护。
+本目录保留旧阿里云 dev 部署代码和历史验收参考。原直部署 workflow 已移除，不再提供
+活动发布入口；本文的旧 workflow 操作步骤不再适用。当前 Memoria 和适配器运行于 QA，
+由 moi-gitops 管理；评测使用 **QA memory benchmark** 与独立 QA key。
+ACR 镜像仓库和 DashScope 模型服务仍可继续使用，与服务是否运行在阿里云集群无关。
 
 ## 实施状态与 Review
 

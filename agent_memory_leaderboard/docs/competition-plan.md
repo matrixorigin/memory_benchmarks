@@ -12,6 +12,243 @@
 
 此前独立的 Memoria `feat/aml-text-adapter` 分支、`aml-local-client` 和相关优化／评测计划停止推进。已有代码、PR、文档和结果保留为参考，不删除或关闭；不以完成旧计划或迁入旧实现作为新项目的前置条件。后续是否采用其中的代码或用例，由新项目的具体任务决定。
 
+## QA 复用与评测负载边界
+
+目标部署位置为 `~/moi/moi-gitops` 管理的 IDC QA 环境。复用既有 Memoria
+和 MatrixOne，只新增 `memory_benchmarks` 的 Add/Search 适配服务及独立 journal PVC、
+认证和 Ingress；共享 Memoria 更新由 GitOps 管理。benchmark runner 按需在本地或 Actions 执行。
+GitOps 配置已通过 [moi-gitops PR #810](https://github.com/matrixorigin/moi-gitops/pull/810) 合入 main；
+合并提交为 `048fff0e3f5eede4c1a21ed4efbe396068de1028`。独立 worktree 为 `~/moi/moi-gitops-qa-aml`。
+共享 QA Memoria 已于 2026-10-08 升级至 0.5.2，源码为准备部署时最新 main `6247235e27bc62898b122473dafae084bea61c80`；
+复用现有密钥、embedding 和已存在的 `memoria_shared` / `mem_u_*` 数据库。
+配置显式启用多库模式，避免引用已不存在的旧 `moi_memoria` 库或触发 legacy 迁移。
+QA 适配器已部署，真实 Add/Search、幂等重放、未认证 401 和跨用户隔离检查通过。
+工作站访问 QA HTTPS `/health`、`/ready` 均为 200；未据此宣称已验证独立公网网络。
+共享注册用户由 54 增至 56（两个人工验收身份），API key 仍为 10；未替换原有运行密钥。
+跨仓库镜像 PR 发布入口仍待实施；benchmark workflow 仅访问 QA，旧阿里云 dev 直部署 workflow 已移除。
+QA 发布入口应构建适配层镜像后向 GitOps 提 PR，
+不把旧阿里云直部署 workflow 的 kubeconfig 换成 QA，也不在 benchmark 仓库复制共享 Memoria 的数据库或主密钥。
+Pulumi scoped preview 因无关 catalog 的输出 checksum 漂移而拒绝发布；首次更新采用
+仅针对两个已审核 Deployment 的资源版本校验 JSON patch，随后同步 Pulumi 状态。
+合并后的标准 GitOps 发布已将 QA Memoria 同步至上述固定镜像，版本 0.5.2、Pod Ready，
+真实 Add/Search、重放幂等及跨 owner 隔离再次通过。标准发布操作整个 idc stack，
+首次合并发布的 [Pulumi Up](https://github.com/matrixorigin/moi-gitops/actions/runs/37757891714) 已结束，
+因 `moi-zhongding/moi-catalog` CrashLoopBackOff、等待 Ready 超时而失败。Memoria 与适配器
+已完成更新并通过上述验收；服务验收与整轮工作流结果应分别判断。
+scoped Actions deploy 尚未独立验收，不能据标准全栈发布推断其已通过。
+日常发布须使用包含 QA 覆盖配置的 main 版本；重跑旧提交可能回退共享 Memoria 的镜像。
+详细部署、接入和验收依据见 GitOps `docs/handbooks/qa-aml-adapter.md`。
+后文阿里云 dev 的部署记录仍属于已有环境，应与 QA 区分。
+
+### 资源归属与发布链路
+
+```mermaid
+flowchart LR
+    B["memory_benchmarks 手动发布"] --> I["构建适配层镜像并记录 digest"]
+    I --> PR["向 moi-gitops 提 PR"]
+    PR --> R["Preview / Review / 合并"]
+    R --> G["moi-gitops: Pulumi Up / idc"]
+    G --> A["aml-qa 适配服务"]
+    C["本地 / benchmark Actions / AML"] --> N["QA NGINX Ingress + TLS"]
+    N --> A
+    A --> J["独立 journal PVC"]
+    A --> M["现有 QA Memoria"]
+    M --> D["现有 MatrixOne"]
+    M --> E["现有 embedding 服务"]
+```
+
+| 项目 | 部署设计 |
+|---|---|
+| 发布配置所有者 | `moi-gitops`；同一 Kubernetes 资源只由该项目管理 |
+| Stack / unit | `idc` / 独立 unit `aml-qa`，依赖现有 `memoria` unit，先完成后端发布 |
+| Namespace | `moi-aml-qa`，不将适配器混入已有 `moi-qa` release |
+| 应用 | 新增原生可选组件 `aml-adapter`，独立 chart / Helm release |
+| Memoria 连接 | 已验证 `http://moi-memoria.moi-memoria.svc.cluster.local:8100`，使用原生 Memoria-Owner 认证 |
+| 数据库、embedding | 由现有 Memoria 管理；适配器不注入数据库密码或 embedding key |
+| 数据身份 | `MEMORIA_NAMESPACE=aml-qa-v1`，结合 run-scoped user 产生隔离 owner；不代表资源隔离 |
+| 应用规格 | 初始 1 Pod、1 worker；CPU request 250m / limit 1，内存 request 256Mi / limit 1Gi，按观测调整 |
+| journal | 新建 5Gi RWO PVC，storageClass 根据 QA 实际配置选择；Recreate，保留 PVC 并记录备份/回滚操作 |
+| 镜像 | `registry.cn-hangzhou.aliyuncs.com/moc-pub/plugin:aml-memory-adapter-YYYYMMDD-SHORTSHA`；部署按 `repository@sha256:...` 固定 |
+
+GitOps 分支已新增 `aml-adapter` unit 组件、配置模型、chart source、
+部署与 preview 入口及 values 合并支持。适配器 chart 从当前已验证 Deployment /
+Service / Ingress 配置整理而来，仅包含适配器资源；不直接接管 dev 中同时包含
+Memoria 的完整 chart，也不为此新建一套 Memoria 或数据库初始化任务。
+
+**待实施的发布入口**：`memory_benchmarks` 新 workflow 仅手动发布已审核的 main 版本：构建适配层镜像、
+推送、记录 source SHA / digest / 构建链接，再向 GitOps 发布分支创建英文 PR。
+目标分支须核实仓库默认分支及团队约定；现有 `up.yaml` 支持 main/dev 并映射至 idc。
+不直接提交目标分支、不自动合并、不从该仓库执行 `kubectl apply` 或 `pulumi up`。
+首次 GitOps PR 增加组件和 unit；日常镜像 PR 仅修改
+`values/idc/aml-qa/aml-adapter.yaml` 的镜像及版本记录。
+
+### Ingress、域名与证书
+
+拟定外部基础地址：
+
+```text
+https://aml-qa.moi.shanghai.idc.matrixorigin.cn:30443
+```
+
+该地址从工作站访问 HTTPS 健康和就绪检查均已通过；独立公网可达性、长请求链路仍待验证。`values/idc/qa/moi-core.yaml`
+中已有 QA 入口使用 HTTPS `:30443`；Ingress host 字段只填域名，不包含协议或端口。
+如果外部网络已具备标准 443 映射，验收后可使用不带端口的基础地址。
+不自动沿用阿里云 dev 的域名、DNS IP、ClusterIssuer 或已有 Eval Key 绑定。
+
+Ingress 规划：
+
+- namespace 为 `moi-aml-qa`，`ingressClassName: nginx`，host 为上述域名。
+- 独立 Service ClusterIP 80 → gateway 8080 → loopback adapter 8000；Memoria 只通过集群内地址访问。
+- `/add`、`/search`、`/health`、`/ready` 使用原始路径，精确路由，不增加统一前缀或 rewrite。
+  Add/Search 保持应用 Bearer 认证，不接入浏览器 SSO，也不公开 Memoria 管理路径。
+- 保留 Authorization / JSON body；不缓存 Add/Search，不启用代理层上游重试。
+- read/send timeout 初始沿用 1800 秒、body-size 64MiB、关闭请求缓冲；对整个网络链路
+  核实超时上限，Ingress 参数不能证明前置 NAT/LB/代理允许长请求。
+- `/health` 保持轻量存活探针；`/ready` 检查 journal 与上游健康。正式验收另做真实
+  数据库写入和检索，避免把 `/ready=200` 当成数据库可写证明。
+
+TLS 复用 `values/idc/moi-tls.yaml` 中现有 `dnspod` ClusterIssuer、
+`*.moi.shanghai.idc.matrixorigin.cn` 泛域名证书及自动续签链路。
+`moi-aml-qa` 匹配既有 replicator 的 `moi-.*` 规则；Ingress 引用本 namespace 中
+实际同步成功的 `moi-wildcard-tls`。发布前检查证书 Ready、SAN 覆盖、有效期和
+secret 同步，不将私钥提交 Git，不另建 ACME 账号或重复签发控制器。
+
+DNS 核实该域名是否已由现有泛解析覆盖；未覆盖时新增 A/CNAME，指向 QA Ingress
+实际对外入口。不能照抄阿里云 dev 的 `47.97.230.53`，也不能将 ClusterIP 或
+Pod IP 写入公网 DNS。须从本地和 GitHub-hosted runner 所在网络验收 DNS、
+`:30443` 连通性和公开受信任 TLS；若仅内网可达，先补外部入口再作为 AML 地址。
+
+### Secret 与 workflow 权限
+
+| 使用位置 | 所需凭据 | 配置方式 |
+|---|---|---|
+| memory_benchmarks 镜像构建 | ACR push 凭据 | GitHub Actions Secret，尽可能限定镜像仓库权限 |
+| memory_benchmarks → GitOps PR | 跨仓库 GitHub App installation token；无法使用时采用受限 PAT | 对目标仓库授予分支写入与 PR 权限；修改 workflow 文件时按实际权限要求单独处理 |
+| GitOps 部署 | 既有 idc 集群身份与 Pulumi 凭据 | 沿用 `moi-gitops` 既有环境配置，不复制到 benchmark 仓库 |
+| QA 适配器 | 独立 ADAPTER_API_KEY | 在 GitOps 私密配置中管理，渲染为 namespace 内 Secret |
+| QA 适配器 → Memoria | 现有 Memoria 可用的 owner/master credential | 按现有认证方式核实；只将必需字段安全注入本 namespace，不复制整份 QA Secret |
+| 本地 / benchmark runner | QA adapter key；Answer/Eval 模型 key | QA 使用独立仓库 Secret `AML_QA_ADAPTER_API_KEY`；模型 key 不注入适配服务 |
+
+普通单仓库 `GITHUB_TOKEN` 不能假定拥有另一个私有仓库的写权限。
+Secrets 不写入明文 values、PR body、镜像层或 artifact；沿用 Pulumi encrypted
+config / namespace Secret 管理。Kubernetes Secret 不支持跨 namespace 引用，
+须在 `moi-aml-qa` 安全注入所需 Memoria 凭据，不能直接引用 `moi-memoria` 中的 Secret。
+
+### 负载保护、冻结与版本记录
+
+- 初期启用一个活跃业务请求的 admission gate，并对适配器发往 Memoria 的请求
+  支持可配置速率上限，QA 验收初始建议每秒 1 个后端 HTTP 请求；这不是每秒
+  1 个 Add 批次。根据真实业务指标逐步提高。worker=1 本身不提供请求串行保证。
+  GitOps 分支已通过独立 NGINX gateway 实现这些保护，QA 使用同步到 ACR 的固定镜像以避免运行时拉取 Docker Hub；过载返回 429 / Retry-After，
+  不改 AML JSON 请求/响应格式。
+- benchmark workflow 仅使用 QA 固定地址和独立 adapter key；旧阿里云部署 workflow 已移除。
+  不提供 dev 选项，不注入旧环境的 key；结果记录 adapter
+  digest、共享 Memoria digest、数据哈希和实际模型配置。
+- GitHub concurrency group 只在同一仓库内生效，不能靠两个仓库写同名 group 实现
+  benchmark 与 GitOps 发布互斥。最低方案为 GitOps 侧可检查的持久冻结状态：评测
+  前先冻结并确认没有在途部署，再启动；评测结束由责任人确认后解除。
+- 既有 `up.yaml` 在合并到 main/dev 后执行整个 idc stack。实施时须增加只含 AML
+  资源变更的 preview 审核，冻结期间拒绝变更适配器及其共享 Memoria 依赖；不能
+  只在 memory_benchmarks 中设置一个变量就宣称 GitOps 发布已被阻止。
+- QA 日常发布可能更新共享 Memoria 或 embedding。正式 AML Full 前需协调这些
+  依赖的版本冻结；若无法协调，应采用独立服务/资源，而不能把共享 QA 视作固定版本。
+- 首次 QA 使用全新 journal 和运行用户，不把 dev journal、旧断点或旧主密钥直接
+  复制过去。切换后运行真实验收；回滚保留 journal，回退上一适配器 digest，并核实
+  journal schema 的向后兼容性。清理评测数据不得影响正常 QA 用户。
+
+### 实施顺序与验收
+
+1. **只读预检**：核实 QA kube context、Memoria Service/版本/认证/API、数据库可写、
+   存储类/配额、IngressClass/入口/端口、TLS secret、目标 GitOps 分支和现有凭据。
+2. **GitOps 基础 PR**：新增 `aml-adapter` 组件、独立 `aml-qa` unit、Deployment /
+   Service / PVC / Secret / Ingress 和环境覆盖；preview 确认没有计划替换现有
+   QA Memoria、MatrixOne 或业务资源；本次另外允许更新共享 Memoria 镜像与显式多库配置，
+   其余 QA 业务资源应保持不变。
+3. **发布入口 PR**：在 memory_benchmarks 增加构建镜像并向 GitOps 提 PR 的 workflow；
+   接入 QA benchmark 目标选择、来源记录、限速/并发保护及 GitOps 冻结检查。
+4. **基础验收**：Pod/PVC Ready；域名+TLS 正常；未授权 Add/Search 401；真实 Add
+   成功后 Search 可读；相同 request_id 重试幂等；原始 JSON 契约不变。
+5. **容量验收**：先 18 条消息 / 2 题最小样例，再一段完整 LoCoMo；观察 QA 业务 P95、
+   数据库/应用/embedding 指标后扩容。长请求 >5 分钟、发布排空和 journal 持久性
+   单独在受控条件验证，不用高负载掩盖基础可用性问题。
+6. **目标切换**：验收通过后更新本地配置、workflow 和官方登记地址（若已有绑定需重绑）。
+   原 dev 环境保持至切换确认；停用旧资源与数据清理作为独立操作，不随新部署执行。
+
+### 实际请求放大与规模
+
+当前 runner 按历史、Add 批次和问题串行执行，适配器在一个 Add 内逐条写入记忆。
+每个成功的新记忆分片正常执行一次 store、一次 GET 读回、一次 Search 可见性校验；
+题目检索另发 Search。因此不能把一次 Add HTTP 请求等同于一次数据库 INSERT。
+Memoria 内部还会执行索引、检索及统计等操作，下面计数是 Memoria HTTP 调用的
+正常成功路径下限，不是 SQL 条数；重试、恢复、初始化与后台任务另计。
+
+2026-10-08 对本地已下载的固定版本 LoCoMo-Refined / LongMemEval-S，使用当前
+label-free renderer、UTF-8 分片规则和 batches 代码离线统计：
+
+| 范围 | Add 批次 | 写入记忆分片 | 文本问题 | Memoria HTTP 调用下限 |
+|---|---:|---:|---:|---:|
+| LoCoMo 第一段完整历史 | 28 | 419 | 87 | 1,344 |
+| LoCoMo 全量 10 段历史 | 399 | 5,882 | 861 | 18,507 |
+| LongMemEval-S 第一段历史 | 69 | 550 | 1 | 1,651 |
+| LongMemEval-S 全量 500 段历史 | 34,019 | 246,755 | 500 | 740,765 |
+
+调用下限按 `3 × 记忆分片数 + 文本问题数` 计算。LoCoMo 全量另外跳过 521 道
+多模态题；第一段历史跳过 51 道。LongMemEval 的一条历史本身包含很多会话，
+题目数量不能作为写入规模的代理。
+
+1024 维 float32 embedding 的裸向量容量，LoCoMo 全量约 24 MB，LongMemEval-S
+全量约 1.01 GB；它们不含正文、数据库向量实际编码、索引、元数据、日志、冗余及
+其他表，不代表实际磁盘占用。当前每次新运行生成新的用户身份，重复实验会累计数据；
+保留策略字段不等同于已实现物理删除。
+
+### 复用条件与运行边界
+
+- 仓库的 `charts/memoria/values.yaml` 默认单副本、CPU limit 1、内存 limit 2Gi；
+  `values/idc/memoria.yaml` 指向共享 `moi-memoria` / `moi_memoria`。这些是配置证据，
+  QA 已验证使用 0.5.2、多库 `memoria_shared` / `mem_u_*` 和真实读写；数据库余量及当前业务负载仍待观测。
+- 独立 adapter namespace 和 run-scoped owner 隔离数据身份，不隔离 Memoria 的 CPU、
+  内存、连接池、数据库计算、存储 I/O 或 embedding 服务额度。
+- 先核实 QA Memoria 的 owner 认证、metadata、query/search API 和镜像版本兼容性。
+  健康接口返回 200 不足以证明数据库读写成功；须真实 Add/Search 验收。
+- 初始仅允许一轮评测运行，采用串行、限速方式，从 18 条消息的最小链路测试扩展到
+  LoCoMo 一段完整历史；记录业务 P95、数据库 CPU/内存/连接/慢查询、Memoria
+  资源与错误率、embedding 延迟，结合 QA 原有基线决定是否扩大。
+- 当前普通 runner 串行但没有显式 QPS 上限，也不能阻止其他客户端或官方评测并发。
+  QA gateway 已限制一个活跃 Add/Search 和每秒一个后端业务请求；跨仓库评测互斥和 Actions 目标选择尚未完成。
+- 长时间全量 LongMemEval-S、并行跑多个数据集、官方 Full，须在验证余量后安排
+  维护窗口或隔离资源。独立 Memoria 实例能隔离应用资源，复用同一个数据库实例
+  仍会共享数据库资源；真正的容量隔离还需数据库租户/计算资源限额或独立实例。
+- 本地 Answer/Eval 的模型调用直接访问模型提供方，不直接增加 Memoria 数据库读写；
+  retrieval-only 则会去掉模型等待间隔，可能使题目检索阶段请求更密集。
+
+### QA benchmark 配置与最小验收
+
+手动 **QA memory benchmark** 仅在 main 执行，固定访问 QA，不再提供阿里云 dev 选项。
+旧阿里云直部署 workflow 已移除，PR／push 不会从本仓库部署到该集群。
+固定地址与独立 QA key 配套使用，不注入旧 dev key。当前账号无 GitHub Environment 管理权限，采用独立命名的仓库 Secret
+`AML_QA_ADAPTER_API_KEY`，已从 QA runtime Secret 安全配置；不复制后端 Master Key、
+数据库、embedding、kubeconfig 或 Pulumi 凭据。
+
+`profile=histories` 保留原有完整历史评测。`profile=minimal` 仅支持 LoCoMo、histories=1：
+先核验原始固定数据，再提取首个完整会话与原始顺序中证据全在此会话的前两道文本题。
+日期、正文和说话人不变，记录原始和派生文件 SHA256。该档用于连接、认证、写入、检索和
+可选作答／判分验收，不代表完整历史，不作为算法质量基线。
+
+2026-10-08 从本地运行当前分支的相同 prepare / execute / summary 路径，访问 QA HTTPS：
+18 条消息、1 个 Add 批次、2 道文本题完成，Search 无空结果，证据召回率 1.0。
+qwen-plus 回答／判分均成功，评分覆盖率 1.0；本地 judge 为 1 对 / 1 错，Token F1
+约 0.5208、BLEU-1 约 0.4154。以上是两题最小链路结果，不是 AML 官方分数或完整质量基线。
+原始数据、模型正文、可恢复 cache 和密钥留在忽略的 var 目录。
+
+Summary 与 JSON 记录目标、URL、profile、数据哈希、范围和可选后端版本备注。
+`runtime_label` 仍是操作者提供、未经自动在线验证的记录；本次验收备注来自实际 Deployment
+镜像 digest。GitHub-hosted runner 的网络路径需要合入 main 后手动选择 QA 验证，不能用
+本地通过代替。QA 并发组只串行本仓库评测，不与 moi-gitops 跨仓库互斥；发布仍需协调。
+
+首次 Actions 建议 minimal + locomo + retrieval；成功后可用 answer-eval 或
+histories=1 的完整历史。完整历史预计至少约 1,344 个后端请求，初始 1 RPS 限制下仅
+请求调度下限约 22.4 分钟，真实耗时还包含 embedding、SQL、模型和重试。
+
 ## 参评赛道与多模态边界
 
 本项目参评范围为 **Textual Memory（文本记忆）**。AML 官方将文本、代码、多模态
@@ -34,7 +271,11 @@
 运行配置是开发验证配置，不作为合规确认。[官方文档](https://agentmemories.ai/zh-cn/docs)、
 [赛事 FAQ](https://agentmemoryleaderboard.ai/competition/)
 
-## CI/CD 交付概要与 Review 入口
+## 历史阿里云 dev 部署参考
+
+本节保留既有部署工程和历史验收依据；旧直部署 workflow 已移除，相关旧 workflow
+操作步骤不再适用。当前 QA 的有效配置、发布归属和 benchmark 入口以前述 QA 章节为准。
+服务已迁移至 QA IDC；ACR 镜像和 qwen-plus / DashScope 模型依赖继续使用。
 
 CI/CD、Memoria 部署模板和自动证书配置已合入 `memory_benchmarks` 的 `origin/main`。
 **Memoria 与适配器已部署到阿里云 dev，公网 HTTPS 和真实 Add/Search 最小联调通过。**
@@ -250,7 +491,7 @@ seed Add；全部成功、无重试，Search P50／P95 为 2.38／3.84 秒，总
 | 入口 | Review 内容 |
 |---|---|
 | [离线 CI](../../.github/workflows/aml-ci.yml) | 触发条件、依赖锁定、检查／构建步骤和独立于发布凭据的运行范围 |
-| [dev CD](../../.github/workflows/aml-dev-deploy.yml) | 分支限制、并发、Secret 使用、镜像 digest、preview／deploy、证书等待及临时文件清理 |
+| [旧 dev 发布参考](../../deploy/README.md) | 分支限制、并发、Secret 使用、镜像 digest、preview／deploy、证书等待及临时文件清理 |
 | [Memoria 来源配置](../../deploy/memoria-source.json)、[镜像选择与记录](../../deploy/scripts/memoria_image.py)、[构建 Dockerfile](../../deploy/docker/memoria.Dockerfile) | 默认 main、分支／tag／commit 选择、实际 SHA 与 digest、编译器／运行镜像和构建缓存 |
 | [Pulumi 程序](../../deploy/pulumi/main.go)、[配置模板](../../deploy/pulumi/Pulumi.new-dev.example.yaml)、[私有配置生成](../../deploy/scripts/dev_config.py) | 目标集群、私有标识、独立 stack、资源所有权、DSN 编码、Secret 传播、PVC 保护与 Helm 依赖 |
 | [更新范围选择](../../deploy/scripts/deployment_target.py)、[Pulumi 配置选择](../../deploy/pulumi/selection.go)、[选择回归用例](../../deploy/tests/test_deployment_target.py) | 首次完整发布、未选应用版本／配置保留、共享凭据与 chart 变动检查、构建后复查 |
@@ -338,7 +579,7 @@ Memoria 默认从源码 `main` 分支构建，由本项目 CD 部署，也可指
 |---|---|
 | `memory_benchmarks/agent_memory_leaderboard` | 维护 FastAPI Add/Search、幂等 journal、数据集执行、评测和报告 |
 | `memory_benchmarks/.github/workflows/aml-ci.yml` | 离线 lint、既有单元／契约测试和 Docker 构建检查；不推送镜像或触发部署 |
-| `memory_benchmarks/.github/workflows/aml-dev-deploy.yml` | 阿里云 dev 手动 preview／deploy；main 自动部署由显式开关启用 |
+| `deploy/README.md` | 旧阿里云 dev 发布参考；活动 workflow 已移除 |
 | `memory_benchmarks/deploy` | 独立 Go Pulumi project、Helm chart、集群检查及一次性数据库初始化脚本 |
 | 阿里云 dev unit | 运行独立 Memoria 和适配器；复用现有 MatrixOne、CSI 与 NGINX |
 | 本地 Memoria 和 MatrixOne | 独立评测后端；通过已有 Compose 或明确配置的开发实例运行 |
@@ -459,8 +700,8 @@ Memoria 是独立来源仓库，日常适配器、评测或文档变更不重复
 独立 `.github/workflows/aml-benchmark.yml` 使用 GitHub hosted runner 执行已有
 `src/benchmark.py`，手动选择 LoCoMo-Refined 或 LongMemEval-S。默认前 1 个完整历史，
 允许 1–10 个历史和 Top K 1–100；不自动随 PR、push、部署或定时任务运行。
-工作流仅接受本仓库 main，固定调用当前 dev 公网入口；唯一业务凭据为已配置的
-`AML_ADAPTER_API_KEY`，映射为 runner 的 `ADAPTER_API_KEY`，仅在执行步骤注入。
+工作流仅接受本仓库 main，固定调用 QA 入口；唯一业务凭据为已配置的
+`AML_QA_ADAPTER_API_KEY`，映射为 runner 的 `ADAPTER_API_KEY`，仅在执行步骤注入。
 不重新部署应用，不要求 SQL、master key、kubeconfig 或 Pulumi。默认 retrieval 不需要
 LLM key；选择 answer-eval 时另外提供回答／裁判模型的配置与凭据。
 
@@ -834,21 +1075,21 @@ LoCoMo／LongMemEval 已由 `benchmarks/ci-datasets.json` 与准备步骤实现�
 
 #### 官方接入材料与 Smoke
 
-以下是申请准备材料，不表示已向平台提交或获得正式资格。2026-10-07 只读核对
-两个 Deployment Ready、Pod 无重启、证书 Ready，公网 `/ready` 返回 200。
-现有自建真实 Add/Search 结果可作为技术说明；`/ready` 不能代替官方 Smoke。
+以下是当前 QA 的申请候选材料，不表示已向平台提交或获得正式资格。Memoria／适配器
+Ready、本地 HTTPS 与真实 Add/Search 验收通过；独立公网与 GitHub-hosted runner 可达性
+仍须验证后才能提交给平台。`/ready` 不能代替官方 Smoke。
 
 | 申请／绑定字段 | 已准备的内容／待完成项 |
 |---|---|
 | 系统／赛道 | Memoria，Textual Memory；参赛组别由负责人按官方模型要求确认 |
 | 方法与代码 | [Memoria](https://github.com/matrixorigin/memoria) 与 [适配／评测仓库](https://github.com/matrixorigin/memory_benchmarks)；基于同事现有适配器，来源及改动据最终冻结代码填写 |
-| Add URL | `https://aml.cn-dev.matrixone.tech/add` |
-| Search URL | `https://aml.cn-dev.matrixone.tech/search` |
-| 健康检查 | `https://aml.cn-dev.matrixone.tech/health`；运维就绪检查为 `/ready` |
-| 鉴权 | `Authorization: Bearer <Memory System Key>`；使用已有 `AML_ADAPTER_API_KEY`，通过官方凭据字段提交，不放入公开说明 |
-| Memoria 版本 | `81c5cc6d5e86a34072ecbc1bb41979b06364e7c7`；部署 digest `sha256:16d7eefa847749ffd4d61569419110a52b8de8fb78a283a8cd57df004d04ea8b` |
+| Add URL | `https://aml-qa.moi.shanghai.idc.matrixorigin.cn:30443/add` |
+| Search URL | `https://aml-qa.moi.shanghai.idc.matrixorigin.cn:30443/search` |
+| 健康检查 | `https://aml-qa.moi.shanghai.idc.matrixorigin.cn:30443/health`；运维就绪检查为 `/ready` |
+| 鉴权 | `Authorization: Bearer <Memory System Key>`；使用 QA key（CI 中名为 `AML_QA_ADAPTER_API_KEY`），通过官方凭据字段提交，不放入公开说明 |
+| Memoria 版本 | 0.5.2，`6247235e27bc62898b122473dafae084bea61c80`；部署 digest `sha256:00b3fd0ab90e31beb968b2f4d8acef8bb9b99dc34ba0fdb48b33a3b8c425daa5` |
 | 适配器版本 | 源码 `3048f6bab82966ee63c25fbf5f6cb51cadf87c6d`，digest `sha256:c273b9605da1ec63f4462c8253d3254399c54ebd01a6cf55767b0105d36e4164`；依据首次成功发布的 build record／推送日志及当前 Deployment，不将 benchmark checkout SHA 当作服务版本 |
-| 运行配置 | 阿里云 dev 独立应用，专用数据库账号，owner 隔离；embedding 为上海 `BAAI/bge-m3`，当前 Add/Search 不调用抽取 LLM；`qwen-plus` 仅用于独立的自建 Answer/Eval |
+| 运行配置 | QA IDC，复用共享 Memoria／数据库、独立 adapter journal、owner 隔离；embedding 为上海 `BAAI/bge-m3`，当前 Add/Search 不调用抽取 LLM；`qwen-plus` 仅用于独立的自建 Answer/Eval |
 | 容量声明 | 初始建议 Add／Search 并发均为 1；这是保守接入建议，尚非最大吞吐或 Full 容量验收结论 |
 | 联系人与机构 | 由负责人填写，并确认组别与允许公开展示的信息 |
 | Eval Key／绑定版本 | 尚未验证可用的官方 Key 或版本绑定；不以适配器 key 替代 |

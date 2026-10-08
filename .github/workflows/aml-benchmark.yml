@@ -1,8 +1,13 @@
-name: AML benchmark
+name: QA memory benchmark
 
 on:
   workflow_dispatch:
     inputs:
+      profile:
+        description: Complete histories, or a LoCoMo-only minimal connectivity check
+        type: choice
+        options: [histories, minimal]
+        default: histories
       dataset:
         description: Public text benchmark
         type: choice
@@ -29,9 +34,9 @@ on:
 permissions:
   contents: read
 
-# Share the deployment lock to prevent service updates during this benchmark.
+# GitOps releases are in another repository and require separate coordination.
 concurrency:
-  group: aml-aliyun-unit-new-dev
+  group: aml-qa-benchmark
   cancel-in-progress: false
 
 jobs:
@@ -50,6 +55,8 @@ jobs:
         id: prepare
         timeout-minutes: 15
         env:
+          AML_BENCHMARK_TARGET: qa
+          AML_BENCHMARK_PROFILE: ${{ inputs.profile || 'histories' }}
           AML_BENCHMARK_DATASET: ${{ inputs.dataset }}
           AML_BENCHMARK_MODE: ${{ inputs.mode }}
           AML_BENCHMARK_HISTORIES: ${{ inputs.histories }}
@@ -68,7 +75,7 @@ jobs:
         id: execute
         timeout-minutes: 120
         env:
-          ADAPTER_API_KEY: ${{ secrets.AML_ADAPTER_API_KEY }}
+          ADAPTER_API_KEY: ${{ secrets.AML_QA_ADAPTER_API_KEY }}
           BENCHMARK_ANSWER_MODEL: ${{ vars.AML_BENCHMARK_ANSWER_MODEL }}
           BENCHMARK_ANSWER_BASE_URL: ${{ vars.AML_BENCHMARK_ANSWER_BASE_URL }}
           BENCHMARK_ANSWER_API_KEY: ${{ secrets.AML_BENCHMARK_ANSWER_API_KEY }}

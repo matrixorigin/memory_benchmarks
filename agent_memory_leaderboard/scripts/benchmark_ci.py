@@ -25,8 +25,9 @@ RESULTS = WORK / "results"
 SELECTION = RESULTS / "selection.json"
 REPORT = RESULTS / "run.json"
 DATA = WORK / "input.json"
+MINIMAL_DATA = WORK / "minimal-input.json"
 CATALOG = ROOT / "benchmarks" / "ci-datasets.json"
-ADAPTER_URL = "https://aml.cn-dev.matrixone.tech"
+ADAPTER_URL = "https://aml-qa.moi.shanghai.idc.matrixorigin.cn:30443"
 
 
 class BenchmarkError(ValueError):
@@ -61,6 +62,14 @@ def file_hash(path):
 
 
 def prepare():
+    target = os.getenv("AML_BENCHMARK_TARGET", "qa")
+    if target != "qa":
+        raise BenchmarkError(
+            "Only the QA target is supported; arbitrary adapter URLs are not accepted"
+        )
+    profile = os.getenv("AML_BENCHMARK_PROFILE", "histories")
+    if profile not in {"histories", "minimal"}:
+        raise BenchmarkError("Choose histories or minimal profile")
     kind = os.getenv("AML_BENCHMARK_DATASET", "locomo")
     catalog = json.loads(CATALOG.read_text())
     if kind not in catalog:
@@ -70,6 +79,8 @@ def prepare():
     if mode not in {"retrieval", "answer-eval"}:
         raise BenchmarkError("Choose retrieval or answer-eval mode")
     limit = integer("AML_BENCHMARK_HISTORIES", "1", min(10, source["histories"]))
+    if profile == "minimal" and (kind != "locomo" or limit != 1):
+        raise BenchmarkError("Minimal profile requires locomo and histories=1")
     top_k = integer("AML_BENCHMARK_TOP_K", "100", 100)
     label = os.getenv("AML_BENCHMARK_RUNTIME_LABEL", "").strip()
     if len(label) > 200 or any(ord(c) < 32 for c in label):
@@ -84,6 +95,8 @@ def prepare():
         "source": source,
         "histories": limit,
         "top_k": top_k,
+        "target_environment": target,
+        "profile": profile,
         "adapter_url": ADAPTER_URL,
         "runtime_label": label or None,
         "backend_revision_verified": False,
@@ -118,9 +131,45 @@ def prepare():
             partial.replace(DATA)
         finally:
             partial.unlink(missing_ok=True)
+    if profile == "minimal":
+        selection["minimal_scope"] = prepare_minimal()
+        selection["input_sha256"] = file_hash(MINIMAL_DATA)
     selection["status"] = "prepared"
     write_json(SELECTION, selection)
-    print(f"Prepared {source['name']}: {limit} complete histories, Top K {top_k}")
+    scope = (
+        "first session / two text questions" if profile == "minimal"
+        else f"{limit} complete histories"
+    )
+    print(f"Prepared {source['name']}: {scope}, Top K {top_k}, target {target}")
+
+
+def prepare_minimal():
+    """Derive a reproducible connectivity sample without dropping gold sources."""
+    sample = json.loads(DATA.read_text())[0]
+    conversation = sample["conversation"]
+    sessions = sorted(
+        (key for key in conversation if re.fullmatch(r"session_\d+", key)),
+        key=lambda key: int(key.split("_")[1]),
+    )
+    if not sessions:
+        raise BenchmarkError("Pinned LoCoMo data has no session for the minimal profile")
+    session = sessions[0]
+    messages = conversation[session]
+    ids = {message["dia_id"] for message in messages}
+    questions = [
+        question for question in sample["qa"]
+        if not question.get("is_multi_modality") and question.get("evidence")
+        and set(question["evidence"]) <= ids
+    ][:2]
+    if len(questions) != 2:
+        raise BenchmarkError("Pinned first session lacks two text questions with complete evidence")
+    scoped = {key: value for key, value in conversation.items() if not key.startswith("session_")}
+    scoped[session] = messages
+    date = session + "_date_time"
+    if date in conversation:
+        scoped[date] = conversation[date]
+    write_json(MINIMAL_DATA, [{**sample, "conversation": scoped, "qa": questions}])
+    return {"session": session, "messages": len(messages), "text_questions": len(questions)}
 
 
 def execute():
@@ -128,7 +177,11 @@ def execute():
     if selection["status"] != "prepared" or file_hash(DATA) != selection["source"]["sha256"]:
         raise BenchmarkError("Run prepare with the pinned dataset before execute")
     if not os.getenv("ADAPTER_API_KEY"):
-        raise BenchmarkError("AML_ADAPTER_API_KEY repository Secret is required")
+        raise BenchmarkError("The selected environment's adapter API key is required")
+    profile = selection.get("profile", "histories")
+    dataset = MINIMAL_DATA if profile == "minimal" else DATA
+    if profile == "minimal" and file_hash(dataset) != selection.get("input_sha256"):
+        raise BenchmarkError("Minimal input SHA256 differs from the prepared sample")
     mode = selection.get("mode", "retrieval")
     if mode == "answer-eval":
         sys.path.insert(0, str(ROOT))
@@ -148,7 +201,7 @@ def execute():
         "--kind",
         selection["dataset"],
         "--dataset",
-        str(DATA),
+        str(dataset),
         "--output",
         str(REPORT),
         "--adapter-url",
@@ -337,6 +390,9 @@ def summary():
         "histories": histories,
         "unassigned_questions": unassigned,
         "official_aml_score": False,
+        "target_environment": selection.get("target_environment", "not_recorded"),
+        "adapter_url": selection.get("adapter_url"),
+        "profile": selection.get("profile", "histories"),
         "request_diagnostics": diagnostics,
         "mode": report.get("mode", selection.get("mode", "retrieval")),
     }
@@ -350,6 +406,10 @@ def summary():
     lines += table(
         [
             ("Dataset", selection.get("source", {}).get("name")),
+            ("Target environment", final["target_environment"]),
+            ("Adapter URL", final["adapter_url"]),
+            ("Profile", final["profile"]),
+            ("Minimal scope (not a quality baseline)", selection.get("minimal_scope")),
             ("Mode", final["mode"]),
             (
                 "Histories / Top K",
@@ -400,6 +460,7 @@ def summary():
             ),
             ("Dataset revision", selection.get("source", {}).get("revision")),
             ("Dataset SHA256", selection.get("source", {}).get("sha256")),
+            ("Derived minimal input SHA256", selection.get("input_sha256")),
         ]
     )
     if totals:
