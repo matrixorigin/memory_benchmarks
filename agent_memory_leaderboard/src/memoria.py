@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from .config import Settings
 from .errors import AdapterError
 from .models import Nonblank
+from .scheduling import BackendScheduler
 
 
 class Memory(BaseModel):
@@ -26,19 +27,25 @@ class Memoria:
     def __init__(self, settings: Settings, client: httpx.Client):
         self.settings = settings
         self.client = client
+        self.scheduler = BackendScheduler(
+            settings.backend_max_concurrency,
+            settings.backend_requests_per_second,
+            settings.backend_queue_timeout_seconds,
+        )
 
     def request(self, method: str, path: str, owner: str, body: dict | None = None) -> Any:
         try:
-            response = self.client.request(
-                method,
-                self.settings.memoria_url.rstrip("/") + path,
-                headers={
-                    "Authorization": f"Memoria-Owner {self.settings.memoria_master_key}",
-                    "X-User-Id": owner,
-                },
-                json=body,
-                timeout=self.settings.timeout_seconds,
-            )
+            with self.scheduler.slot():
+                response = self.client.request(
+                    method,
+                    self.settings.memoria_url.rstrip("/") + path,
+                    headers={
+                        "Authorization": f"Memoria-Owner {self.settings.memoria_master_key}",
+                        "X-User-Id": owner,
+                    },
+                    json=body,
+                    timeout=self.settings.timeout_seconds,
+                )
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
             raise AdapterError(503, "Memoria connection unavailable", write_not_sent=True) from exc
         except httpx.TimeoutException as exc:
