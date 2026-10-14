@@ -88,6 +88,14 @@ request window. `MEMORIA_TIMEOUT_SECONDS` controls each upstream call (default
 the project's live integration smoke; official platform Smoke and long-request
 validation remain pending. See the [current acceptance status](docs/competition-plan.md#当前交付状态).
 
+Concurrent Add/Search requests can queue native Memoria calls without changing
+synchronous Add semantics. Set `MEMORIA_MAX_CONCURRENCY=1` and
+`MEMORIA_REQUESTS_PER_SECOND=1` to serialize and pace backend calls. Both limits
+default to `0` (disabled). `MEMORIA_QUEUE_TIMEOUT_SECONDS` defaults to 120;
+queue expiry returns retryable 503 without sending that native call. Probe
+requests bypass this queue. The budget is process-local, so use one replica and
+one Uvicorn worker when it must protect shared backend capacity globally.
+
 ```sh
 curl http://localhost:8000/add \
   -H "Authorization: Bearer $ADAPTER_API_KEY" \
