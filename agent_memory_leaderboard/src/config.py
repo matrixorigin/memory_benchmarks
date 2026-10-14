@@ -16,6 +16,7 @@ class Settings:
     backend_max_concurrency: int = 0
     backend_requests_per_second: float = 0
     backend_queue_timeout_seconds: float = 120
+    max_active_requests: int = 40
 
     def __post_init__(self) -> None:
         url = urlsplit(self.memoria_url)
@@ -34,6 +35,8 @@ class Settings:
             raise ValueError("MEMORIA_TIMEOUT_SECONDS must be positive and finite")
         if self.backend_max_concurrency < 0:
             raise ValueError("MEMORIA_MAX_CONCURRENCY must be nonnegative")
+        if self.max_active_requests <= 0:
+            raise ValueError("ADAPTER_MAX_ACTIVE_REQUESTS must be positive")
         if (
             not math.isfinite(self.backend_requests_per_second)
             or self.backend_requests_per_second < 0
@@ -57,4 +60,5 @@ class Settings:
             backend_max_concurrency=int(os.getenv("MEMORIA_MAX_CONCURRENCY", "0")),
             backend_requests_per_second=float(os.getenv("MEMORIA_REQUESTS_PER_SECOND", "0")),
             backend_queue_timeout_seconds=float(os.getenv("MEMORIA_QUEUE_TIMEOUT_SECONDS", "120")),
+            max_active_requests=int(os.getenv("ADAPTER_MAX_ACTIVE_REQUESTS", "40")),
         )

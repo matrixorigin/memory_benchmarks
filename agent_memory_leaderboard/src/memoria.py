@@ -86,7 +86,7 @@ class Memoria:
                 # Forward only bounded, numeric delay hints, never arbitrary headers.
                 retry_after=(
                     str(min(int(retry_after), 60))
-                    if code == 429
+                    if code in {429, 503}
                     and retry_after.isascii()
                     and retry_after.isdigit()
                     and len(retry_after) <= 10

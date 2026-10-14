@@ -6,6 +6,11 @@ import pytest
 from src.smoke import call_adapter
 
 
+@pytest.fixture(autouse=True)
+def deterministic_retry_jitter(monkeypatch):
+    monkeypatch.setattr("src.smoke.random.uniform", lambda low, high: 0)
+
+
 @pytest.mark.parametrize("path", ["/add", "/search"])
 @pytest.mark.parametrize("failure", [408, 425, 429, 500, 502, 503, 504, "transport"])
 def test_smoke_retries_transient_errors_with_identical_payload(monkeypatch, path, failure):
@@ -25,7 +30,7 @@ def test_smoke_retries_transient_errors_with_identical_payload(monkeypatch, path
     with httpx.Client(transport=httpx.MockTransport(backend)) as client:
         assert call_adapter(client, "http://adapter.test", {}, path, payload) == {"ok": True}
     assert bodies == [payload, payload]
-    assert delays == [2 if failure == 429 else 0.25]
+    assert delays == [2 if failure in {429, 503} else 0.25]
 
 
 @pytest.mark.parametrize("status", [409, 524])
@@ -81,4 +86,42 @@ def test_smoke_retry_budget_is_bounded(monkeypatch, failure):
         with pytest.raises(httpx.ReadTimeout if failure == "transport" else httpx.HTTPStatusError):
             call_adapter(client, "http://adapter.test", {}, "/add", {})
     assert len(calls) == 6
-    assert delays == [0.25, 0.5, 1, 2, 2]
+    assert delays == [0.25, 0.5, 1, 2, 4]
+
+
+def test_503_retry_hint_is_honored_with_positive_jitter(monkeypatch):
+    delays = []
+    calls = []
+    monkeypatch.setattr("src.smoke.random.uniform", lambda low, high: high)
+    monkeypatch.setattr("src.smoke.time.sleep", delays.append)
+
+    def backend(request):
+        calls.append(request)
+        return (
+            httpx.Response(503, headers={"Retry-After": "4"})
+            if len(calls) == 1
+            else (httpx.Response(200, json={"ok": True}))
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(backend)) as client:
+        assert call_adapter(client, "http://adapter.test", {}, "/add", {}) == {"ok": True}
+    assert delays == [5]
+
+
+@pytest.mark.parametrize("hint", ["-1", "invalid", "1, 2", "９", "9" * 11])
+def test_invalid_503_retry_hint_uses_exponential_backoff(monkeypatch, hint):
+    calls = []
+    delays = []
+    monkeypatch.setattr("src.smoke.time.sleep", delays.append)
+
+    def backend(request):
+        calls.append(request)
+        return (
+            httpx.Response(503, headers={"Retry-After": hint.encode()})
+            if len(calls) == 1
+            else (httpx.Response(200, json={}))
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(backend)) as client:
+        call_adapter(client, "http://adapter.test", {}, "/add", {})
+    assert delays == [0.25]
