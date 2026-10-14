@@ -91,10 +91,19 @@ validation remain pending. See the [current acceptance status](docs/competition-
 Concurrent Add/Search requests can queue native Memoria calls without changing
 synchronous Add semantics. Set `MEMORIA_MAX_CONCURRENCY=1` and
 `MEMORIA_REQUESTS_PER_SECOND=1` to serialize and pace backend calls. Both limits
-default to `0` (disabled). `MEMORIA_QUEUE_TIMEOUT_SECONDS` defaults to 120;
-queue expiry returns retryable 503 without sending that native call. Probe
-requests bypass this queue. The budget is process-local, so use one replica and
-one Uvicorn worker when it must protect shared backend capacity globally.
+default to `0` (disabled). `ADAPTER_MAX_ACTIVE_REQUESTS` defaults to 40 and
+sets the dedicated business thread capacity. Requests wait asynchronously for
+admission before borrowing a thread; authentication and probes do not use the
+shared default thread limiter. `MEMORIA_QUEUE_TIMEOUT_SECONDS` defaults to 120
+and separately bounds admission waiting and each native-call queue wait. It is
+not an overall Add deadline. Expired admission never starts journal/write work;
+expired native queue entries never send that call. Both return retryable 503
+with a congestion-based, 2–60 second Retry-After hint. Running write threads
+retain admission through cancellation until journal handling completes.
+The local retry client honors numeric 429/503 hints and uses exponential backoff
+with up to one second of positive jitter (at most 61 seconds per retry). Native
+FIFO waiters use individual events so only the head is signaled. The budget is
+process-local: use one replica and one worker for a global backend limit.
 
 ```sh
 curl http://localhost:8000/add \

@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import random
 import time
 import uuid
 from urllib.parse import quote
@@ -28,7 +29,7 @@ def call_adapter(
     if path == "/add":
         retryable |= {409, 524}
     for attempt in range(6):
-        delay = min(2**attempt / 4, 2)
+        delay = min(2**attempt / 4, 30)
         start = time.monotonic()
         try:
             response = http.post(adapter_url.rstrip("/") + path, headers=headers, json=body)
@@ -63,10 +64,14 @@ def call_adapter(
                 response.raise_for_status()
                 assert response.status_code == 200, f"{path} must return 200"
                 return response.json()
-            if response.status_code == 429:
+            if response.status_code in {429, 503}:
                 value = response.headers.get("Retry-After", "")
-                delay = min(int(value), 60) if value.isdigit() and len(value) <= 10 else 60
-        time.sleep(delay)
+                if value.isascii() and value.isdigit() and len(value) <= 10:
+                    delay = max(delay, min(int(value), 60))
+                elif response.status_code == 429:
+                    delay = 60
+        # Never retry earlier than the server's hint; jitter spreads simultaneous callers.
+        time.sleep(delay + random.uniform(0, min(1, delay / 4)))
 
 
 def run(adapter_url: str) -> dict:

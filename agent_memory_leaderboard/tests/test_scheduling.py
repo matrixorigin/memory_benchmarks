@@ -11,7 +11,7 @@ from test_endpoints import FakeMemoria
 from src.app import create_app
 from src.config import Settings
 from src.errors import AdapterError
-from src.scheduling import BackendScheduler
+from src.scheduling import BackendScheduler, retry_after
 
 
 def test_sixteen_adds_queue_native_calls_and_probes_stay_available(tmp_path):
@@ -133,8 +133,57 @@ def test_backend_exception_releases_capacity():
         {"backend_requests_per_second": float("inf")},
         {"backend_queue_timeout_seconds": 0},
         {"backend_queue_timeout_seconds": float("nan")},
+        {"max_active_requests": 0},
     ],
 )
 def test_invalid_budget_rejected(change):
     with pytest.raises(ValueError):
         replace(Settings(memoria_url="http://memoria.test", memoria_master_key="test"), **change)
+
+
+def test_fifo_progress_without_broadcast_wakeups():
+    scheduler = BackendScheduler(1, 0, 2)
+    order = []
+
+    def queued(index):
+        with scheduler.slot():
+            order.append(index)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        with scheduler.slot():
+            futures = []
+            for index in range(8):
+                futures.append(pool.submit(queued, index))
+                deadline = time.monotonic() + 1
+                while True:
+                    with scheduler.lock:
+                        if len(scheduler.waiters) == index + 1:
+                            break
+                    assert time.monotonic() < deadline
+                    time.sleep(0.001)
+        for future in futures:
+            future.result(timeout=2)
+    assert order == list(range(8))
+    assert scheduler.active == 0
+    assert not scheduler.waiters
+
+
+def test_retry_hint_scales_with_congestion_and_is_bounded():
+    assert int(retry_after(20, 1, 2)) > int(retry_after(1, 1, 2))
+    assert retry_after(1000, 1, 120) == "60"
+    assert retry_after(0, 1, 0) == "2"
+    assert int(retry_after(1, 1, 0.001, rate_delay=10)) >= 10
+
+
+def test_rate_timer_advances_fifo_without_needing_a_release():
+    scheduler = BackendScheduler(2, 50, 1)
+    with scheduler.slot():
+        with ThreadPoolExecutor(max_workers=1) as pool:
+
+            def next_call():
+                with scheduler.slot():
+                    return time.monotonic()
+
+            started = time.monotonic()
+            finished = pool.submit(next_call).result(timeout=1)
+            assert 0.01 <= finished - started < 0.5

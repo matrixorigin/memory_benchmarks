@@ -13,6 +13,7 @@ from .errors import AdapterError
 from .journal import Journal
 from .memoria import Memoria
 from .models import AddRequest, AddResponse, SearchRequest, SearchResponse
+from .scheduling import RequestAdmission
 from .service import MemoryAdapter
 
 
@@ -21,11 +22,16 @@ def create_app(settings: Settings | None = None, *, client: httpx.Client | None 
     http = client or httpx.Client(follow_redirects=False, trust_env=False)
     # Keep probe connections and thread capacity independent of long Add/Search calls.
     probe_http = client or httpx.Client(
-        follow_redirects=False, trust_env=False,
+        follow_redirects=False,
+        trust_env=False,
         limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
     )
     probe_threads = anyio.CapacityLimiter(1)
     probe_gate = anyio.Semaphore(1)
+    business_threads = anyio.CapacityLimiter(settings.max_active_requests)
+    admission = RequestAdmission(
+        settings.max_active_requests, settings.backend_queue_timeout_seconds
+    )
     adapter = MemoryAdapter(settings, Memoria(settings, http), Journal(settings.state_dir))
 
     @asynccontextmanager
@@ -65,7 +71,7 @@ def create_app(settings: Settings | None = None, *, client: httpx.Client | None 
             probe_gate.release()
         return JSONResponse(status_code=503, content={"status": "not_ready"})
 
-    def authenticate(request: Request) -> None:
+    async def authenticate(request: Request) -> None:
         if settings.api_key is None:
             return
         authorization = request.headers.get("Authorization", "")
@@ -115,8 +121,10 @@ def create_app(settings: Settings | None = None, *, client: httpx.Client | None 
         return JSONResponse(status_code=422, content={"detail": issues})
 
     @app.post("/add", response_model=AddResponse, dependencies=[Depends(authenticate)])
-    def add(request: AddRequest):
-        return adapter.add(request)
+    async def add(request: AddRequest):
+        async with admission.slot():
+            # Keep admission until the write thread finishes and records its outcome.
+            return await anyio.to_thread.run_sync(adapter.add, request, limiter=business_threads)
 
     @app.post(
         "/search",
@@ -124,7 +132,8 @@ def create_app(settings: Settings | None = None, *, client: httpx.Client | None 
         response_model_exclude_none=True,
         dependencies=[Depends(authenticate)],
     )
-    def search(request: SearchRequest):
-        return adapter.search(request)
+    async def search(request: SearchRequest):
+        async with admission.slot():
+            return await anyio.to_thread.run_sync(adapter.search, request, limiter=business_threads)
 
     return app
