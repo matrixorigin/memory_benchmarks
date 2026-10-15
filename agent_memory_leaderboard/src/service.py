@@ -27,17 +27,20 @@ class MemoryAdapter:
         return digest([self.settings.namespace, user_id])
 
     def add(self, request: AddRequest) -> AddResponse:
-        owner = self.owner(request.user_id)
-        key = digest([self.settings.memoria_url.rstrip("/"), owner, request.request_id])
-        fingerprint = digest(request.model_dump())
-        with self.journal.lock(key):
-            if not self.journal.begin(key, fingerprint):
-                for position, body in enumerate(self.write_bodies(request, key)):
-                    self.write(owner, key, position, body)
-                self.journal.complete(key)
-        return AddResponse(
-            request_id=request.request_id, user_id=request.user_id, session_id=request.session_id
-        )
+        with self.journal.metrics.add():
+            owner = self.owner(request.user_id)
+            key = digest([self.settings.memoria_url.rstrip("/"), owner, request.request_id])
+            fingerprint = digest(request.model_dump())
+            with self.journal.lock(key):
+                if not self.journal.begin(key, fingerprint):
+                    for position, body in enumerate(self.write_bodies(request, key)):
+                        self.write(owner, key, position, body)
+                    self.journal.complete(key)
+            return AddResponse(
+                request_id=request.request_id,
+                user_id=request.user_id,
+                session_id=request.session_id,
+            )
 
     def write_bodies(self, request: AddRequest, key: str):
         session = digest([self.settings.namespace, request.user_id, request.session_id])

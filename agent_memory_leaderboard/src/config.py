@@ -17,6 +17,8 @@ class Settings:
     backend_requests_per_second: float = 0
     backend_queue_timeout_seconds: float = 120
     max_active_requests: int = 40
+    journal_log_all_operations: bool = False
+    journal_slow_ms: float = 100
 
     def __post_init__(self) -> None:
         url = urlsplit(self.memoria_url)
@@ -37,6 +39,10 @@ class Settings:
             raise ValueError("MEMORIA_MAX_CONCURRENCY must be nonnegative")
         if self.max_active_requests <= 0:
             raise ValueError("ADAPTER_MAX_ACTIVE_REQUESTS must be positive")
+        if type(self.journal_log_all_operations) is not bool:
+            raise ValueError("ADAPTER_JOURNAL_LOG_ALL_OPERATIONS must be a boolean")
+        if not math.isfinite(self.journal_slow_ms) or self.journal_slow_ms < 0:
+            raise ValueError("ADAPTER_JOURNAL_SLOW_MS must be nonnegative and finite")
         if (
             not math.isfinite(self.backend_requests_per_second)
             or self.backend_requests_per_second < 0
@@ -50,6 +56,9 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        journal_logging = os.getenv("ADAPTER_JOURNAL_LOG_ALL_OPERATIONS", "false").lower()
+        if journal_logging not in {"true", "false", "1", "0"}:
+            raise ValueError("ADAPTER_JOURNAL_LOG_ALL_OPERATIONS must be true/false or 1/0")
         return cls(
             memoria_url=os.environ["MEMORIA_URL"].rstrip("/"),
             memoria_master_key=os.environ["MEMORIA_MASTER_KEY"],
@@ -61,4 +70,6 @@ class Settings:
             backend_requests_per_second=float(os.getenv("MEMORIA_REQUESTS_PER_SECOND", "0")),
             backend_queue_timeout_seconds=float(os.getenv("MEMORIA_QUEUE_TIMEOUT_SECONDS", "120")),
             max_active_requests=int(os.getenv("ADAPTER_MAX_ACTIVE_REQUESTS", "40")),
+            journal_log_all_operations=journal_logging in {"true", "1"},
+            journal_slow_ms=float(os.getenv("ADAPTER_JOURNAL_SLOW_MS", "100")),
         )
