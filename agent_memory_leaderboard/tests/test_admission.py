@@ -8,6 +8,7 @@ from test_endpoints import FakeMemoria
 
 from src.app import create_app
 from src.config import Settings
+from src.memoria import IDEMPOTENT_PATH
 from src.scheduling import RequestAdmission
 
 
@@ -178,7 +179,7 @@ def test_cancelling_inflight_add_keeps_admission_until_write_is_journaled(tmp_pa
         scopes = []
 
         def backend(request):
-            if request.url.path == "/v1/memories":
+            if request.url.path == IDEMPOTENT_PATH:
                 entered.set()
                 assert release.wait(5)
             return fake(request)

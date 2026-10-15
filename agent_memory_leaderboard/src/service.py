@@ -4,7 +4,7 @@ import json
 from .config import Settings
 from .errors import AdapterError
 from .ingestion import message_parts
-from .journal import Journal
+from .journal import IDEMPOTENT_PROTOCOL, LEGACY_PROTOCOL, Journal
 from .memoria import Memoria
 from .models import AddRequest, AddResponse, Evidence, SearchRequest, SearchResponse, text_content
 
@@ -66,11 +66,15 @@ class MemoryAdapter:
                 yield body
 
     def write(self, owner: str, key: str, position: int, body: dict) -> None:
-        state, memory_id = self.journal.state(key, position)
+        state, memory_id, protocol = self.journal.state(key, position)
+        if protocol not in {LEGACY_PROTOCOL, IDEMPOTENT_PROTOCOL}:
+            raise AdapterError(503, "Unsupported journal write protocol; check adapter version")
         if state == "stored":
             return
+        if state not in {"pending", "inflight"}:
+            raise AdapterError(503, "Unsupported journal write state; check adapter version")
         marker = body["extra_metadata"]["aml_write"]
-        if state == "inflight":
+        if state == "inflight" and protocol == LEGACY_PROTOCOL:
             memory = (
                 self.memoria.get(owner, memory_id)
                 if memory_id
@@ -80,22 +84,28 @@ class MemoryAdapter:
                 # A timeout/crash doesn't prove that Memoria stopped processing.
                 # Reposting here could create duplicates, even after a negative query.
                 raise AdapterError(503, "Prior write outcome is unknown; retry the same Add later")
+        elif state == "inflight" and memory_id:
+            memory = self.memoria.get(owner, memory_id)
         else:
-            self.journal.record(key, position, "inflight")
+            # A pending legacy write is known not to have been sent/committed.
+            # Persist the new protocol before POST so even a pre-send crash can
+            # safely replay it. Unknown legacy inflight writes never enter here.
+            protocol = IDEMPOTENT_PROTOCOL
+            self.journal.record(key, position, "inflight", protocol=protocol)
             try:
-                memory = self.memoria.store(owner, body)
+                memory = self.memoria.store_idempotent(owner, body, marker)
             except AdapterError as exc:
                 if exc.write_not_sent:
-                    self.journal.record(key, position, "pending")
+                    self.journal.record(key, position, "pending", protocol=protocol)
                 raise
-            self.journal.record(key, position, "inflight", memory.memory_id)
+            self.journal.record(key, position, "inflight", memory.memory_id, protocol=protocol)
 
         # A point read alone does not prove visibility through the retrieval path.
         persisted = self.memoria.get(owner, memory.memory_id)
         if persisted.extra_metadata.get("aml_write") != marker:
             raise AdapterError(502, "Memoria did not persist the write marker")
         self.memoria.verify_searchable(owner, persisted, marker)
-        self.journal.record(key, position, "stored", persisted.memory_id)
+        self.journal.record(key, position, "stored", persisted.memory_id, protocol=protocol)
 
     def search(self, request: SearchRequest) -> SearchResponse:
         memories = self.memoria.search(

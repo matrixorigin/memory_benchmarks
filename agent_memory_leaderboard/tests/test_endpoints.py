@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -10,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from src.app import create_app
 from src.config import Settings
+from src.memoria import IDEMPOTENT_PATH
 
 
 class FakeMemoria:
@@ -19,10 +21,17 @@ class FakeMemoria:
         self.calls = []
         self.memories = []
         self.hook = None
+        self.receipts = {}
+        self.receipt_lock = threading.Lock()
+        self.active_branch = "main"
 
     @property
     def writes(self):
-        return [call for call in self.calls if call[0:2] == ("POST", "/v1/memories")]
+        return [
+            call
+            for call in self.calls
+            if call[0] == "POST" and call[1] in {"/v1/memories", IDEMPOTENT_PATH}
+        ]
 
     def __call__(self, request):
         body = json.loads(request.content) if request.content else None
@@ -38,38 +47,72 @@ class FakeMemoria:
 
     def respond(self, request, body, owner):
         path = request.url.path
+        if request.method == "POST" and path == IDEMPOTENT_PATH:
+            key = (owner, body["branch"], body["idempotency_key"])
+            with self.receipt_lock:
+                if key in self.receipts:
+                    original, memory = self.receipts[key]
+                    if body != original or not memory["is_active"]:
+                        return httpx.Response(422)
+                    return httpx.Response(201, json=memory)
+                memory = self.make_memory(body, owner)
+                identity = ["memoria.store.v1", *key]
+                memory["memory_id"] = hashlib.sha256(
+                    json.dumps(identity, separators=(",", ":")).encode()
+                ).hexdigest()[:32]
+                self.receipts[key] = (copy.deepcopy(body), memory)
+                self.memories.append(memory)
+                return httpx.Response(201, json=memory)
         if request.method == "POST" and path == "/v1/memories":
-            memory = {
-                **body,
-                "memory_id": f"{len(self.memories) + 1:032x}",
-                "user_id": owner,
-                "is_active": True,
-                "retrieval_score": 0.9,
-                "created_at": "2026-10-03T12:00:00Z",
-            }
+            memory = self.make_memory(body, owner)
             self.memories.append(memory)
             return httpx.Response(201, json=memory)
         if request.method == "GET":
             memory_id = path.rsplit("/", 1)[1]
+            branch = request.url.params.get("branch", self.active_branch)
             memory = next(
-                (m for m in self.memories if m["memory_id"] == memory_id and m["user_id"] == owner),
+                (
+                    m
+                    for m in self.memories
+                    if m["memory_id"] == memory_id
+                    and m["user_id"] == owner
+                    and m.get("branch", "main") == branch
+                ),
                 None,
             )
             return httpx.Response(200, content=json.dumps(memory))
         if path == "/v1/memories/query":
             marker = body["extra_metadata_filter"]["aml_write"]
+            branch = body.get("branch", self.active_branch)
             items = [
                 m
                 for m in self.memories
-                if m["user_id"] == owner and m["extra_metadata"]["aml_write"] == marker
+                if m["user_id"] == owner
+                and m["extra_metadata"]["aml_write"] == marker
+                and m.get("branch", "main") == branch
             ]
             return httpx.Response(200, json={"items": items, "next_cursor": None})
         if path == "/v1/memories/search":
             assert "session_id" not in body
             assert "options" not in body
-            items = [m for m in reversed(self.memories) if m["user_id"] == owner]
+            branch = body.get("branch", self.active_branch)
+            items = [
+                m
+                for m in reversed(self.memories)
+                if m["user_id"] == owner and m.get("branch", "main") == branch
+            ]
             return httpx.Response(200, json=items)
         raise AssertionError(f"Unexpected upstream path: {path}")
+
+    def make_memory(self, body, owner):
+        return {
+            **body,
+            "memory_id": f"{len(self.memories) + 1:032x}",
+            "user_id": owner,
+            "is_active": True,
+            "retrieval_score": 0.9,
+            "created_at": "2026-10-03T12:00:00Z",
+        }
 
 
 @pytest.fixture
@@ -185,7 +228,7 @@ def test_idempotency_survives_restart_and_conflicting_payload(settings, upstream
 
 
 @pytest.mark.parametrize("failure", ["timeout", "server_error", "bad_json"])
-def test_partial_write_lost_response_recovered_without_reposting(settings, upstream, failure):
+def test_partial_write_lost_response_replayed_without_duplicates(settings, upstream, failure):
     payload = addition(
         messages=[
             {"role": "user", "content": "First fact"},
@@ -194,7 +237,7 @@ def test_partial_write_lost_response_recovered_without_reposting(settings, upstr
     )
 
     def hook(request, body, owner):
-        if request.url.path == "/v1/memories" and len(upstream.writes) == 2:
+        if request.url.path == IDEMPOTENT_PATH and len(upstream.writes) == 2:
             upstream.respond(request, body, owner)  # Commit, then lose the acknowledgement.
             if failure == "timeout":
                 raise httpx.ReadTimeout("upstream-secret", request=request)
@@ -210,14 +253,15 @@ def test_partial_write_lost_response_recovered_without_reposting(settings, upstr
     upstream.hook = None
     with running(settings, upstream) as client:
         assert client.post("/add", json=payload).status_code == 200
-        assert len(upstream.writes) == 2
+        assert len(upstream.writes) == 3
+        assert upstream.writes[1][3] == upstream.writes[2][3]
         assert len(search(client).json()["data"]) == 2
-        assert any(call[1] == "/v1/memories/query" for call in upstream.calls)
+        assert not any(call[1] == "/v1/memories/query" for call in upstream.calls)
 
 
-def test_ambiguous_uncommitted_write_is_never_blindly_reposted(settings, upstream):
+def test_ambiguous_uncommitted_atomic_write_recovers(settings, upstream):
     def timeout(request, body, owner):
-        if request.url.path == "/v1/memories":
+        if request.url.path == IDEMPOTENT_PATH:
             raise httpx.ReadTimeout("timeout", request=request)
 
     upstream.hook = timeout
@@ -226,16 +270,16 @@ def test_ambiguous_uncommitted_write_is_never_blindly_reposted(settings, upstrea
     upstream.hook = None
     with running(settings, upstream) as client:
         for _ in range(2):
-            response = client.post("/add", json=addition())
-            assert response.status_code == 503
-            assert "outcome is unknown" in response.text
-        assert len(upstream.writes) == 1
+            assert client.post("/add", json=addition()).status_code == 200
+        assert len(upstream.writes) == 2
+        assert len(upstream.memories) == 1
+        assert upstream.writes[0][3] == upstream.writes[1][3]
 
 
 @pytest.mark.parametrize("failure", ["connection", 400, 403, 422, 425, 429])
 def test_definitely_uncommitted_write_can_retry(settings, upstream, failure):
     def hook(request, body, owner):
-        if request.url.path == "/v1/memories":
+        if request.url.path == IDEMPOTENT_PATH:
             if failure == "connection":
                 raise httpx.ConnectError("refused", request=request)
             return httpx.Response(failure, text="upstream-secret")
@@ -268,7 +312,7 @@ def test_concurrent_requests_across_app_instances(settings, upstream):
     release = threading.Event()
 
     def block(request, body, owner):
-        if request.url.path == "/v1/memories":
+        if request.url.path == IDEMPOTENT_PATH:
             entered.set()
             assert release.wait(5)
 
@@ -321,7 +365,11 @@ def test_search_order_top_k_dedup_and_options(settings, upstream):
             upstream.memories[-1]["memory_id"],
             upstream.memories[-3]["memory_id"],
         ]
-        assert upstream.calls[-1][3] == {"query": "Where do I work?", "top_k": 2}
+        assert upstream.calls[-1][3] == {
+            "query": "Where do I work?",
+            "top_k": 2,
+            "branch": "main",
+        }
         assert search(client, top_k=1000).status_code == 200
         assert upstream.calls[-1][3]["top_k"] == 100
         assert search(client, query=[{"type": "text", "text": " moon "}]).status_code == 200
