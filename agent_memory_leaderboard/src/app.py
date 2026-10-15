@@ -32,7 +32,12 @@ def create_app(settings: Settings | None = None, *, client: httpx.Client | None 
     admission = RequestAdmission(
         settings.max_active_requests, settings.backend_queue_timeout_seconds
     )
-    adapter = MemoryAdapter(settings, Memoria(settings, http), Journal(settings.state_dir))
+    journal = Journal(
+        settings.state_dir,
+        log_all_operations=settings.journal_log_all_operations,
+        slow_ms=settings.journal_slow_ms,
+    )
+    adapter = MemoryAdapter(settings, Memoria(settings, http), journal)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
