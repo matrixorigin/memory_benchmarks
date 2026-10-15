@@ -12,6 +12,7 @@ import httpx
 
 from .config import Settings
 from .diagnostics import adapter_reason_code
+from .memoria import ADAPTER_BRANCH
 from .service import digest
 
 
@@ -95,7 +96,12 @@ def run(adapter_url: str) -> dict:
             return response
 
         def records(user):
-            return backend("GET", "/v1/memories?limit=100", user).json()["items"]
+            return backend(
+                "GET",
+                "/v1/memories",
+                user,
+                params={"limit": 100, "branch": ADAPTER_BRANCH},
+            ).json()["items"]
 
         def call(path, body):
             return call_adapter(http, adapter_url, headers, path, body)
@@ -168,6 +174,7 @@ def run(adapter_url: str) -> dict:
                         json={
                             "query": "Orion",
                             "top_k": limit,
+                            "branch": ADAPTER_BRANCH,
                         },
                     ).json()
                     counts[limit] = len(direct)
@@ -192,7 +199,12 @@ def run(adapter_url: str) -> dict:
             # not physically erase storage/snapshots for retention compliance.
             for user in users:
                 for memory in records(user):
-                    backend("DELETE", "/v1/memories/" + quote(memory["memory_id"], safe=""), user)
+                    backend(
+                        "DELETE",
+                        "/v1/memories/" + quote(memory["memory_id"], safe=""),
+                        user,
+                        params={"branch": ADAPTER_BRANCH},
+                    )
 
 
 def main():

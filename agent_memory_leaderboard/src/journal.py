@@ -7,6 +7,9 @@ from pathlib import Path
 
 from .errors import AdapterError
 
+LEGACY_PROTOCOL = "legacy"
+IDEMPOTENT_PROTOCOL = "idempotent_v1"
+
 
 class Journal:
     def __init__(self, directory: Path):
@@ -15,20 +18,29 @@ class Journal:
         self.locks.mkdir(exist_ok=True)
         self.path = directory / "requests.sqlite3"
         with self.connect() as db:
-            db.executescript("""
+            # Serialize schema inspection and upgrade across app processes. Existing
+            # writes must remain legacy: metadata markers are not atomic receipts.
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("""
                 CREATE TABLE IF NOT EXISTS requests (
                     key TEXT PRIMARY KEY,
                     fingerprint TEXT NOT NULL,
                     complete INTEGER NOT NULL DEFAULT 0
-                );
+                )
+            """)
+            db.execute("""
                 CREATE TABLE IF NOT EXISTS writes (
                     request_key TEXT NOT NULL,
                     position INTEGER NOT NULL,
                     state TEXT NOT NULL,
                     memory_id TEXT,
+                    protocol TEXT NOT NULL DEFAULT 'legacy',
                     PRIMARY KEY (request_key, position)
-                );
+                )
             """)
+            columns = {row[1] for row in db.execute("PRAGMA table_info(writes)")}
+            if "protocol" not in columns:
+                db.execute("ALTER TABLE writes ADD COLUMN protocol TEXT NOT NULL DEFAULT 'legacy'")
 
     @contextmanager
     def connect(self):
@@ -81,21 +93,32 @@ class Journal:
             db.execute("INSERT INTO requests(key, fingerprint) VALUES (?, ?)", (key, fingerprint))
             return False
 
-    def state(self, key: str, position: int) -> tuple[str, str | None]:
+    def state(self, key: str, position: int) -> tuple[str, str | None, str]:
         with self.connect() as db:
             row = db.execute(
-                "SELECT state, memory_id FROM writes WHERE request_key = ? AND position = ?",
+                "SELECT state, memory_id, protocol FROM writes "
+                "WHERE request_key = ? AND position = ?",
                 (key, position),
             ).fetchone()
-            return row if row else ("pending", None)
+            return row if row else ("pending", None, IDEMPOTENT_PROTOCOL)
 
-    def record(self, key: str, position: int, state: str, memory_id: str | None = None) -> None:
+    def record(
+        self,
+        key: str,
+        position: int,
+        state: str,
+        memory_id: str | None = None,
+        *,
+        protocol: str,
+    ) -> None:
         with self.connect() as db:
             db.execute(
-                "INSERT INTO writes VALUES (?, ?, ?, ?) "
+                "INSERT INTO writes(request_key, position, state, memory_id, protocol) "
+                "VALUES (?, ?, ?, ?, ?) "
                 "ON CONFLICT(request_key, position) DO UPDATE SET "
-                "state = excluded.state, memory_id = excluded.memory_id",
-                (key, position, state, memory_id),
+                "state = excluded.state, memory_id = excluded.memory_id, "
+                "protocol = excluded.protocol",
+                (key, position, state, memory_id, protocol),
             )
 
     def complete(self, key: str) -> None:

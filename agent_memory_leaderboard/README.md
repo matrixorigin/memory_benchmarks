@@ -151,19 +151,63 @@ directories and network filesystems are not supported. Keep the Memoria URL,
 namespace, and adapter version stable during a run. Never delete active lock
 files or the journal to recover a request.
 
-Idempotency is keyed by user and `request_id`. Exact retries reuse completed
-writes; changed payloads return HTTP 400, and concurrent copies return HTTP 409. Partial requests
-resume from the last confirmed chunk. If a write response is lost, the adapter
-looks up its persisted metadata marker instead of sending it again.
+Idempotency is keyed by backend URL, user and `request_id`. Exact retries reuse
+completed writes; changed payloads return HTTP 400, and concurrent copies return
+HTTP 409. Partial requests resume from the last confirmed chunk. Changing even
+an alias for the same backend changes the key; URL migration and recovery after
+losing the journal are not supported by this change.
 
-Memoria currently has no atomic request-id write API. A timeout or crash with no
-discoverable record has an ambiguous outcome: the adapter returns HTTP 503 and
-keeps checking on retries, rather than risk a duplicate write. If Memoria never
-committed, that request needs operator reconciliation after confirming the old
-write cannot still complete. This also applies to a crash between journaling
-the attempt and sending it. An upstream atomic idempotency API would be needed
-to retry such cases automatically with an exactly-once guarantee. Definite
-connection failures and pre-write rejections remain safely retryable.
+New writes require Memoria's atomic `POST /v1/memories/idempotent` API (introduced
+in [Memoria #310](https://github.com/matrixorigin/memoria/pull/310)). Each chunk
+uses its existing `aml_write` marker as `idempotency_key`. The adapter persists
+the `idempotent_v1` protocol in SQLite **before** sending HTTP. On a later Add
+retry, an attempt without an acknowledged memory ID can safely resend the same
+key and body: the backend returns the existing receipt or creates the record
+once. This recovers both pre-commit server failures and a crash after journaling
+but before sending. The adapter still makes one write attempt per incoming Add
+attempt; it does not add an internal retry loop. Once the memory ID is known,
+retries use point reads and retrieval probes instead of reposting.
+
+Atomic writes, all point reads/recovery queries/visibility probes, and public
+Search explicitly use branch `main`, keeping the receipt scope independent of
+a backend checkout.
+This adapter does not support selecting other branches. The backend must retain
+the active receipt: a changed payload or inactive receipt is rejected rather
+than overwritten or resurrected. The guarantee covers one record per logical
+chunk within the same owner/branch/key, not transactional completion of an
+entire multi-chunk Add or exactly-once background processing.
+
+Deploy a backend supporting the dedicated atomic route before enabling new
+writes. An upstream 404/405 returns 502 with an upgrade explanation; the adapter
+never falls back to ordinary `POST /v1/memories`, since an old server could
+silently ignore an unknown `idempotency_key` field. Readiness still checks health
+and journal access, not atomic-route capability. An offline or QA smoke using
+synthetic data must verify the write route before an evaluation run.
+
+### Existing journals and rollback
+
+Startup upgrades the four-column `writes` table transactionally, adding a
+`protocol` column whose default is `legacy`. Existing rows are never assumed to
+have atomic receipts. Completed Add requests and `stored` chunks are reused;
+legacy `inflight` chunks keep their original point-read/metadata-query recovery
+path and are never reposted to the new route. A legacy `pending` chunk, or a
+chunk never attempted before, may use the atomic route because no old write is
+outstanding. Legacy records must also belong to `main`; runs previously written
+to another branch require separate operator reconciliation and are not
+automatically moved into the new receipt scope.
+
+If a legacy unknown write has no discoverable record, Add still returns 503 and
+requires operator reconciliation after proving the old write cannot complete.
+Do not delete the journal, reset the row or blindly convert it to the atomic
+protocol: an old ordinary write has no new receipt and could still commit later.
+
+Stop all old adapter processes before upgrading and preserve the whole state
+directory. Older binaries cannot safely interpret atomic attempts; their old
+four-value `INSERT INTO writes VALUES (...)` fails against the upgraded schema
+before issuing a new ordinary write. This is a safety barrier, not a supported
+rollback mode. Do not drop the protocol column or restore a stale journal
+snapshot while newer writes may have committed. Rollback requires a compatible
+adapter or a separate, reconciled evaluation namespace.
 
 Error handling follows the [AML error reference](https://agentmemories.ai/docs#doc-en-errors):
 

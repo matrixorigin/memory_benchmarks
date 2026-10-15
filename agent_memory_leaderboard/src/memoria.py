@@ -11,6 +11,9 @@ from .errors import AdapterError
 from .models import Nonblank
 from .scheduling import BackendScheduler
 
+IDEMPOTENT_PATH = "/v1/memories/idempotent"
+ADAPTER_BRANCH = "main"
+
 
 class Memory(BaseModel):
     model_config = ConfigDict(strict=True)
@@ -75,6 +78,8 @@ class Memoria:
             }.get(
                 code, (502, f"Memoria returned HTTP {code}; check backend health and API version")
             )
+            if path == IDEMPOTENT_PATH and code in {404, 405}:
+                reason = "Memoria atomic writes unsupported; upgrade backend before retrying Add"
             # Admission/validation rejections cannot commit a write. Timeouts,
             # conflicts and server errors remain ambiguous and require recovery.
             rejected = code in {400, 401, 403, 404, 405, 413, 415, 422, 425, 429}
@@ -110,11 +115,15 @@ class Memoria:
             raise AdapterError(503, "Memoria memory is not active")
         return result
 
-    def store(self, owner: str, body: dict) -> Memory:
-        return self.memory(self.request("POST", "/v1/memories", owner, body), owner)
+    def store_idempotent(self, owner: str, body: dict, marker: str) -> Memory:
+        # The dedicated route fails safely on old servers. Never fall back to
+        # ordinary POST, where an unknown JSON field could be silently ignored.
+        payload = {**body, "idempotency_key": marker, "branch": ADAPTER_BRANCH}
+        return self.memory(self.request("POST", IDEMPOTENT_PATH, owner, payload), owner)
 
     def get(self, owner: str, memory_id: str) -> Memory:
-        data = self.request("GET", f"/v1/memories/{quote(memory_id, safe='')}", owner)
+        path = f"/v1/memories/{quote(memory_id, safe='')}?branch={ADAPTER_BRANCH}"
+        data = self.request("GET", path, owner)
         if data is None:
             raise AdapterError(503, "Memoria write is not yet readable")
         memory = self.memory(data, owner)
@@ -127,7 +136,11 @@ class Memoria:
             "POST",
             "/v1/memories/query",
             owner,
-            {"extra_metadata_filter": {"aml_write": marker}, "limit": 2},
+            {
+                "extra_metadata_filter": {"aml_write": marker},
+                "limit": 2,
+                "branch": ADAPTER_BRANCH,
+            },
         )
         if not isinstance(data, dict) or not isinstance(data.get("items"), list):
             raise AdapterError(502, "Memoria returned an invalid recovery response")
@@ -144,7 +157,10 @@ class Memoria:
     def search(self, owner: str, query: str, top_k: int) -> list[Memory]:
         # No session filter: the user boundary includes all of their sessions.
         data = self.request(
-            "POST", "/v1/memories/search", owner, {"query": query, "top_k": min(top_k, 100)}
+            "POST",
+            "/v1/memories/search",
+            owner,
+            {"query": query, "top_k": min(top_k, 100), "branch": ADAPTER_BRANCH},
         )
         if not isinstance(data, list):
             raise AdapterError(502, "Memoria returned an invalid search response")
@@ -155,7 +171,12 @@ class Memoria:
             "POST",
             "/v1/memories/search",
             owner,
-            {"query": memory.content, "top_k": 100, "subject_id": marker},
+            {
+                "query": memory.content,
+                "top_k": 100,
+                "subject_id": marker,
+                "branch": ADAPTER_BRANCH,
+            },
         )
         if not isinstance(data, list):
             raise AdapterError(502, "Memoria returned an invalid visibility response")
