@@ -13,13 +13,13 @@ class Settings:
     state_dir: Path = Path("var")
     namespace: str = "agent-memory-leaderboard"
     timeout_seconds: float = 120
+    visibility_timeout_seconds: float = field(default=10, kw_only=True)
     backend_max_concurrency: int = 0
     backend_requests_per_second: float = 0
     backend_queue_timeout_seconds: float = 120
     max_active_requests: int = 40
     journal_log_all_operations: bool = False
     journal_slow_ms: float = 100
-    visibility_timeout_seconds: float = 10
 
     def __post_init__(self) -> None:
         url = urlsplit(self.memoria_url)
@@ -36,11 +36,6 @@ class Settings:
             raise ValueError("MEMORIA_MASTER_KEY and MEMORIA_NAMESPACE must be nonempty")
         if not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0:
             raise ValueError("MEMORIA_TIMEOUT_SECONDS must be positive and finite")
-        if (
-            not math.isfinite(self.visibility_timeout_seconds)
-            or not 0 < self.visibility_timeout_seconds <= 120
-        ):
-            raise ValueError("MEMORIA_VISIBILITY_TIMEOUT_SECONDS must be in (0, 120]")
         if self.backend_max_concurrency < 0:
             raise ValueError("MEMORIA_MAX_CONCURRENCY must be nonnegative")
         if self.max_active_requests <= 0:
@@ -49,6 +44,11 @@ class Settings:
             raise ValueError("ADAPTER_JOURNAL_LOG_ALL_OPERATIONS must be a boolean")
         if not math.isfinite(self.journal_slow_ms) or self.journal_slow_ms < 0:
             raise ValueError("ADAPTER_JOURNAL_SLOW_MS must be nonnegative and finite")
+        if (
+            not math.isfinite(self.visibility_timeout_seconds)
+            or not 0 < self.visibility_timeout_seconds <= 120
+        ):
+            raise ValueError("MEMORIA_VISIBILITY_TIMEOUT_SECONDS must be in (0, 120]")
         if (
             not math.isfinite(self.backend_requests_per_second)
             or self.backend_requests_per_second < 0
