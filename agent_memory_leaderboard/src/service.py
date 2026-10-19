@@ -87,6 +87,8 @@ class MemoryAdapter:
                 raise AdapterError(503, "Prior write outcome is unknown; retry the same Add later")
             memory_id = memory.memory_id
         else:
+            # Pending rows and atomic inflight rows without an ID can both replay
+            # the receipt key. Unknown legacy inflight rows are handled above.
             # A pending legacy write is known not to have been sent/committed.
             # Persist the new protocol before POST so even a pre-send crash can
             # safely replay it. Unknown legacy inflight writes never enter here.

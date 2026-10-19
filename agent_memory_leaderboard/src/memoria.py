@@ -1,5 +1,6 @@
 """HTTP boundary: use an owner-scoped master credential, never caller headers."""
 
+import math
 import time
 from typing import Annotated, Any
 from urllib.parse import quote
@@ -37,13 +38,14 @@ class Memoria:
             settings.backend_queue_timeout_seconds,
         )
 
-    @staticmethod
-    def _remaining_visibility(deadline: float) -> float:
+    def _visibility_timeout(self) -> AdapterError:
+        delay = str(max(1, min(60, math.ceil(self.settings.visibility_timeout_seconds))))
+        return AdapterError(503, "Memoria write visibility timed out; retry Add", retry_after=delay)
+
+    def _remaining_visibility(self, deadline: float) -> float:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise AdapterError(
-                503, "Memoria write visibility timed out; retry Add", retry_after="1"
-            )
+            raise self._visibility_timeout()
         return remaining
 
     def request(
@@ -57,11 +59,14 @@ class Memoria:
     ) -> Any:
         if deadline is not None:
             self._remaining_visibility(deadline)
+        visibility_limited = False
         try:
             with self.scheduler.slot(deadline=deadline):
                 timeout = self.settings.timeout_seconds
                 if deadline is not None:
-                    timeout = min(timeout, self._remaining_visibility(deadline))
+                    remaining = self._remaining_visibility(deadline)
+                    visibility_limited = remaining <= timeout
+                    timeout = min(timeout, remaining)
                 response = self.client.request(
                     method,
                     self.settings.memoria_url.rstrip("/") + path,
@@ -72,10 +77,16 @@ class Memoria:
                     json=body,
                     timeout=timeout,
                 )
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
-            raise AdapterError(503, "Memoria connection unavailable", write_not_sent=True) from exc
         except httpx.TimeoutException as exc:
+            if deadline is not None and (visibility_limited or time.monotonic() >= deadline):
+                raise self._visibility_timeout() from exc
+            if isinstance(exc, (httpx.ConnectTimeout, httpx.PoolTimeout)):
+                raise AdapterError(
+                    503, "Memoria connection unavailable", write_not_sent=True
+                ) from exc
             raise AdapterError(504, "Memoria request timed out") from exc
+        except httpx.ConnectError as exc:
+            raise AdapterError(503, "Memoria connection unavailable", write_not_sent=True) from exc
         except httpx.RequestError as exc:
             raise AdapterError(502, "Memoria transport failed") from exc
 

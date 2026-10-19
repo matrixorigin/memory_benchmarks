@@ -245,3 +245,60 @@ def test_visibility_deadline_also_limits_scheduler_wait(boundary, upstream, limi
         assert not scheduler.waiters
     assert scheduler.active == 0
     assert len(upstream.calls) == calls_before
+
+
+@pytest.mark.parametrize(
+    "kind", [httpx.ReadTimeout, httpx.WriteTimeout, httpx.ConnectTimeout, httpx.PoolTimeout]
+)
+@pytest.mark.parametrize("stage", ["read", "search"])
+def test_visibility_limited_http_timeout_has_retryable_visibility_contract(
+    boundary, upstream, clock, kind, stage
+):
+    owner, marker, _, memory = stored(boundary)
+
+    def timeout(request, body, owner):
+        if stage == "search" and request.method == "GET":
+            return None
+        raise kind("synthetic timeout", request=request)
+
+    upstream.hook = timeout
+    with pytest.raises(AdapterError) as caught:
+        boundary.wait_for_visibility(owner, memory.memory_id, marker)
+    assert caught.value.status == 503
+    assert "visibility timed out" in caught.value.reason
+    assert caught.value.retry_after == "1"
+    assert not clock.sleeps and len(upstream.writes) == 1
+
+
+@pytest.mark.parametrize("seconds,hint", [(0.4, "1"), (10, "10"), (60, "60"), (120, "60")])
+def test_visibility_retry_hint_scales_and_is_bounded(boundary, upstream, clock, seconds, hint):
+    owner, marker, _, memory = stored(boundary)
+    boundary.settings = replace(boundary.settings, visibility_timeout_seconds=seconds)
+
+    def expired(request, body, owner):
+        clock.now += seconds
+        return httpx.Response(200, content="null")
+
+    upstream.hook = expired
+    with pytest.raises(AdapterError) as caught:
+        boundary.wait_for_visibility(owner, memory.memory_id, marker)
+    assert caught.value.status == 503 and caught.value.retry_after == hint
+    assert not clock.sleeps
+
+
+@pytest.mark.parametrize("kind,status", [(httpx.ReadTimeout, 504), (httpx.ConnectTimeout, 503)])
+def test_shorter_normal_http_timeout_keeps_original_mapping(
+    boundary, upstream, clock, kind, status
+):
+    owner, marker, _, memory = stored(boundary)
+    boundary.settings = replace(boundary.settings, timeout_seconds=0.01)
+
+    def timeout(request, body, owner):
+        raise kind("synthetic timeout", request=request)
+
+    upstream.hook = timeout
+    with pytest.raises(AdapterError) as caught:
+        boundary.wait_for_visibility(owner, memory.memory_id, marker)
+    assert caught.value.status == status and caught.value.retry_after is None
+    assert "visibility timed out" not in caught.value.reason
+    assert not clock.sleeps

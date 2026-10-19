@@ -250,9 +250,11 @@ uses per-phase I/O timeouts: this is not a hard cancellation timer for the full
 Add or a running socket operation. A result returned after the deadline is not
 accepted as verified. No new probe is issued after expiry.
 
-On polling expiry Add returns a retryable 503 and leaves the write inflight;
-later same-ID replay verifies without rewriting it. Invalid JSON/schema,
-wrong-owner/ID/marker, inactive memory, authorization failures and arbitrary
+On polling expiry, or an HTTP timeout capped by the remaining visibility budget,
+Add returns the same retryable 503 and leaves the write inflight. `Retry-After`
+is the ceiling of the configured budget, bounded to 1–60 seconds. Later same-ID
+replay verifies without rewriting it. A shorter ordinary HTTP timeout retains its
+existing error mapping. Invalid JSON/schema, wrong-owner/ID/marker, inactive memory, authorization failures and arbitrary
 upstream errors are not treated as visibility lag. Existing error mappings are
 preserved. Only after both checks succeed may the journal mark stored/completed.
 The policy is per write/part, not a deadline for an entire multi-message Add.
