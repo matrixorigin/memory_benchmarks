@@ -1,6 +1,7 @@
 """Durable idempotency state, with process-safe locks on a shared local disk."""
 
 import fcntl
+import math
 import sqlite3
 import threading
 import time
@@ -12,7 +13,6 @@ from .journal_metrics import JournalMetrics
 
 LEGACY_PROTOCOL = "legacy"
 IDEMPOTENT_PROTOCOL = "idempotent_v1"
-JOURNAL_WAIT_SECONDS = 5.0
 
 
 class TimedConnection:
@@ -23,12 +23,19 @@ class TimedConnection:
     def execute(self, statement, parameters=()):
         return self.timing.run("sql", self.db.execute, statement, parameters)
 
-    def executescript(self, script):
-        return self.timing.run("sql", self.db.executescript, script)
-
 
 class Journal:
-    def __init__(self, directory: Path, *, log_all_operations=False, slow_ms=100):
+    def __init__(
+        self,
+        directory: Path,
+        *,
+        log_all_operations=False,
+        slow_ms=100,
+        queue_timeout_seconds=5.0,
+    ):
+        if not math.isfinite(queue_timeout_seconds) or not 0 < queue_timeout_seconds <= 120:
+            raise ValueError("Journal queue timeout must be in (0, 120]")
+        self.queue_timeout_seconds = queue_timeout_seconds
         self.metrics = JournalMetrics(log_all_operations=log_all_operations, slow_ms=slow_ms)
         directory.mkdir(parents=True, exist_ok=True)
         self.locks = directory / "locks"
@@ -64,8 +71,8 @@ class Journal:
                 db.execute("ALTER TABLE writes ADD COLUMN protocol TEXT NOT NULL DEFAULT 'legacy'")
 
     def _acquire_connection_slot(self):
-        deadline = time.monotonic() + JOURNAL_WAIT_SECONDS
-        if not self._connection_mutex.acquire(timeout=JOURNAL_WAIT_SECONDS):
+        deadline = time.monotonic() + self.queue_timeout_seconds
+        if not self._connection_mutex.acquire(timeout=self.queue_timeout_seconds):
             raise TimeoutError
         handle = None
         try:
@@ -131,6 +138,21 @@ class Journal:
                             # must roll back before this connection is closed.
                             timing.run("rollback", db.rollback)
                             raise
+            except sqlite3.Error as exc:
+                raise AdapterError(503, "Idempotency journal unavailable") from exc
+            finally:
+                if db is not None:
+                    timing.run("close", db.close)
+
+    def probe(self) -> None:
+        # A read-only probe must not join the writer queue or configure SQLite.
+        # BUSY/corruption/missing storage still fail closed, with a short wait.
+        with self.metrics.operation("probe") as timing:
+            db = None
+            try:
+                uri = self.path.absolute().as_uri() + "?mode=ro"
+                db = timing.run("connect", sqlite3.connect, uri, uri=True, timeout=0.05)
+                timing.run("sql", db.execute, "SELECT key FROM requests LIMIT 1").fetchone()
             except sqlite3.Error as exc:
                 raise AdapterError(503, "Idempotency journal unavailable") from exc
             finally:

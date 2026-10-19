@@ -19,6 +19,7 @@ class Settings:
     max_active_requests: int = 40
     journal_log_all_operations: bool = False
     journal_slow_ms: float = 100
+    journal_queue_timeout_seconds: float = 5
 
     def __post_init__(self) -> None:
         url = urlsplit(self.memoria_url)
@@ -35,6 +36,11 @@ class Settings:
             raise ValueError("MEMORIA_MASTER_KEY and MEMORIA_NAMESPACE must be nonempty")
         if not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0:
             raise ValueError("MEMORIA_TIMEOUT_SECONDS must be positive and finite")
+        if (
+            not math.isfinite(self.journal_queue_timeout_seconds)
+            or not 0 < self.journal_queue_timeout_seconds <= 120
+        ):
+            raise ValueError("ADAPTER_JOURNAL_QUEUE_TIMEOUT_SECONDS must be in (0, 120]")
         if self.backend_max_concurrency < 0:
             raise ValueError("MEMORIA_MAX_CONCURRENCY must be nonnegative")
         if self.max_active_requests <= 0:
@@ -72,4 +78,7 @@ class Settings:
             max_active_requests=int(os.getenv("ADAPTER_MAX_ACTIVE_REQUESTS", "40")),
             journal_log_all_operations=journal_logging in {"true", "1"},
             journal_slow_ms=float(os.getenv("ADAPTER_JOURNAL_SLOW_MS", "100")),
+            journal_queue_timeout_seconds=float(
+                os.getenv("ADAPTER_JOURNAL_QUEUE_TIMEOUT_SECONDS", "5")
+            ),
         )

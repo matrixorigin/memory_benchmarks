@@ -36,6 +36,7 @@ def create_app(settings: Settings | None = None, *, client: httpx.Client | None 
         settings.state_dir,
         log_all_operations=settings.journal_log_all_operations,
         slow_ms=settings.journal_slow_ms,
+        queue_timeout_seconds=settings.journal_queue_timeout_seconds,
     )
     adapter = MemoryAdapter(settings, Memoria(settings, http), journal)
 
@@ -55,8 +56,7 @@ def create_app(settings: Settings | None = None, *, client: httpx.Client | None 
 
     def check_readiness() -> bool:
         try:
-            with adapter.journal.connect() as db:
-                db.execute("SELECT key FROM requests LIMIT 1").fetchone()
+            adapter.journal.probe()
             response = probe_http.get(f"{settings.memoria_url}/health", timeout=3)
             return 200 <= response.status_code < 300
         except (AdapterError, httpx.HTTPError):

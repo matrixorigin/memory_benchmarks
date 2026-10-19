@@ -8,7 +8,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from src import journal as journal_module
 from src.errors import AdapterError
 from src.journal import IDEMPOTENT_PROTOCOL, Journal
 
@@ -91,7 +90,7 @@ def test_queue_timeout_does_not_open_sqlite_or_change_state_and_can_retry(
     tmp_path, monkeypatch, caplog
 ):
     holder = Journal(tmp_path)
-    follower = Journal(tmp_path, log_all_operations=True)
+    follower = Journal(tmp_path, log_all_operations=True, queue_timeout_seconds=0.02)
     caplog.set_level(logging.INFO, logger="uvicorn.error")
     original_connect = sqlite3.connect
     opened = []
@@ -100,7 +99,6 @@ def test_queue_timeout_does_not_open_sqlite_or_change_state_and_can_retry(
         opened.append(True)
         return original_connect(*args, **kwargs)
 
-    monkeypatch.setattr(journal_module, "JOURNAL_WAIT_SECONDS", 0.02)
     with holder.connect("probe"):
         monkeypatch.setattr(sqlite3, "connect", connect)
         with pytest.raises(AdapterError) as caught:
@@ -166,3 +164,53 @@ def test_gate_file_error_is_safe_and_does_not_leak_local_mutex(tmp_path, monkeyp
         assert caught.value.status == 503
     assert "synthetic-private-path" not in caplog.text
     assert journal.begin("synthetic", "fingerprint") is False
+
+
+@pytest.mark.parametrize("value", [0, -1, 121, float("nan"), float("inf")])
+def test_invalid_journal_queue_budget_rejected(tmp_path, value):
+    from src.config import Settings
+
+    with pytest.raises(ValueError, match="queue timeout"):
+        Journal(tmp_path, queue_timeout_seconds=value)
+    with pytest.raises(ValueError, match="ADAPTER_JOURNAL_QUEUE_TIMEOUT_SECONDS"):
+        Settings(
+            memoria_url="http://memoria.test",
+            memoria_master_key="synthetic",
+            journal_queue_timeout_seconds=value,
+        )
+
+
+def test_journal_queue_budget_from_environment(monkeypatch):
+    from src.config import Settings
+
+    monkeypatch.setenv("MEMORIA_URL", "http://memoria.test")
+    monkeypatch.setenv("MEMORIA_MASTER_KEY", "synthetic")
+    monkeypatch.setenv("ADAPTER_JOURNAL_QUEUE_TIMEOUT_SECONDS", "12.5")
+    assert Settings.from_env().journal_queue_timeout_seconds == 12.5
+
+
+def test_application_passes_queue_budget_to_journal(tmp_path, monkeypatch):
+    import src.app as app_module
+    from src.config import Settings
+
+    budgets = []
+    original = Journal
+
+    def journal(*args, **kwargs):
+        budgets.append(kwargs["queue_timeout_seconds"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(app_module, "Journal", journal)
+    import httpx
+
+    with httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200))) as http:
+        app_module.create_app(
+            Settings(
+                memoria_url="http://memoria.test",
+                memoria_master_key="synthetic",
+                state_dir=tmp_path,
+                journal_queue_timeout_seconds=12.5,
+            ),
+            client=http,
+        )
+    assert budgets == [12.5]
