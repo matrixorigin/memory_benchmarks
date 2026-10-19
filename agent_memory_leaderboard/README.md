@@ -239,7 +239,9 @@ Run the isolated synthetic benchmark with
 inject a fixed delay per commit, or `--source-root /path/to/checkout/agent_memory_leaderboard`
 to compare another checkout with the same harness. It uses temporary storage
 and an in-memory synthetic backend, never calls a service, and reports only
-aggregate counts and timings. Its results are not deployment capacity estimates.
+aggregate counts and timings. It measures explicit `db.commit()` calls; an
+implicit SQLite context-manager commit aborts the run instead of producing an
+undercounted result. Its results are not deployment capacity estimates.
 
 These changes retain `synchronous=FULL`, the existing journal mode and schema,
 and the per-request and cross-process locks. No SQLite transaction or global

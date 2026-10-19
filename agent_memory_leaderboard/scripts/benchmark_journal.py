@@ -19,6 +19,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 
+class UnsupportedCommitError(RuntimeError):
+    """The source checkout uses a commit path this harness cannot measure."""
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", type=Path, default=Path(__file__).resolve().parents[1])
@@ -72,6 +76,17 @@ def main():
             commit_lock = threading.Lock()
 
             class Connection(sqlite3.Connection):
+                def __exit__(self, exc_type, exc_value, traceback):
+                    if exc_type is None and self.in_transaction:
+                        # sqlite3's context-manager commit bypasses this subclass's
+                        # commit() override, so neither its count nor delay is valid.
+                        self.rollback()
+                        raise UnsupportedCommitError(
+                            "Benchmark aborted: implicit context-manager commits are not "
+                            "measured. Use a source checkout with explicit db.commit() calls."
+                        )
+                    return super().__exit__(exc_type, exc_value, traceback)
+
                 def commit(self):
                     nonlocal commits
                     if args.commit_delay_ms:
@@ -103,6 +118,8 @@ def main():
             try:
                 with ThreadPoolExecutor(max_workers=concurrency) as pool:
                     results = list(pool.map(add, range(args.requests)))
+            except UnsupportedCommitError as exc:
+                parser.exit(1, f"{exc}\n")
             finally:
                 elapsed = time.perf_counter() - started
                 sqlite3.connect = original_connect
