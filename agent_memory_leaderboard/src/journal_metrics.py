@@ -15,7 +15,17 @@ from .errors import AdapterError
 # Uvicorn configures this logger at INFO in the adapter's existing entrypoint.
 LOGGER = logging.getLogger("uvicorn.error")
 OPERATIONS = frozenset(
-    {"initialize", "probe", "begin", "state", "record", "complete", "lock_acquire", "lock_release"}
+    {
+        "initialize",
+        "probe",
+        "begin",
+        "state",
+        "prepare_write",
+        "record",
+        "complete",
+        "lock_acquire",
+        "lock_release",
+    }
 )
 
 
