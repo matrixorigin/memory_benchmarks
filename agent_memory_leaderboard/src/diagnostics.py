@@ -8,6 +8,12 @@ from pathlib import Path
 def adapter_reason_code(response):
     """Recognize fixed adapter reasons without persisting response text or values."""
     reasons = {
+        (
+            504,
+            "Adapter request budget exhausted; retry the same request",
+        ): "adapter_request_timeout",
+        (503, "Idempotency journal is busy; retry Add"): "journal_queue_timeout",
+        (503, "Memoria write visibility timed out; retry Add"): "write_visibility_timeout",
         (503, "Prior write outcome is unknown; retry the same Add later"): "write_outcome_unknown",
         (
             503,

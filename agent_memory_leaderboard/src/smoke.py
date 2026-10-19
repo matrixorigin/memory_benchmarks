@@ -80,7 +80,7 @@ def run(adapter_url: str) -> dict:
     run_id = uuid.uuid4().hex
     users = [f"aml-smoke:{run_id}:{suffix}" for suffix in ("alice", "bob", "empty")]
     headers = {"Authorization": f"Bearer {settings.api_key}"} if settings.api_key else {}
-    with httpx.Client(timeout=settings.timeout_seconds, trust_env=False) as http:
+    with httpx.Client(timeout=httpx.Timeout(1800, connect=30, pool=30), trust_env=False) as http:
 
         def backend(method, path, user, **kwargs):
             response = http.request(
