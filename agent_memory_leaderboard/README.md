@@ -184,6 +184,31 @@ silently ignore an unknown `idempotency_key` field. Readiness still checks healt
 and journal access, not atomic-route capability. An offline or QA smoke using
 synthetic data must verify the write route before an evaluation run.
 
+### Concurrent journal operations
+
+Each journal connection/short transaction takes a process-local mutex and a
+separate `sqlite.lock` advisory file lock before opening SQLite. The mutex avoids
+thread polling contention; the file lock coordinates cooperating processes and
+Journal instances sharing the supported local state directory. The slot is held
+through connection setup, SQL, commit/rollback and close, then released. It is
+never held across a Memoria HTTP request. The existing nonblocking per-request
+lock and its HTTP 409 behavior are unchanged.
+
+Slot acquisition has a five-second budget (including both waits). An exhausted
+wait returns a safe HTTP 503 and records `journal_queue_timeout`; lock-file I/O
+failure records `journal_lock_io_error`. Neither enters SQLite or reports a
+successful write. The slot is released on exceptions and process exit. Preserve
+`sqlite.lock` with the rest of the state directory and never unlink it while
+processes may be using it. SQLite still uses its existing five-second busy timeout
+for non-cooperating/old clients, and `synchronous=FULL` remains enabled.
+
+This prevents cooperating adapter operations from racing inside SQLite; it does
+not increase the storage device's durable-write throughput or promise a given
+client concurrency. Queue waiting is included in journal timing under the `queue`
+phase so saturation remains visible. Stop old adapter processes before upgrading:
+they do not participate in the new slot, and external SQLite access can still
+cause genuine BUSY errors. No journal-mode or on-disk schema migration is required.
+
 ### Existing journals and rollback
 
 Startup upgrades the four-column `writes` table transactionally, adding a
