@@ -268,6 +268,34 @@ never reported as success. The local smoke client uses the documented Add/Search
 retry status sets and transport retries, bounded to six attempts with the same
 payload. It does not retry Search 409/524 or malformed successful responses.
 
+## Write visibility budget
+
+`MEMORIA_VISIBILITY_TIMEOUT_SECONDS` defaults to `10`; it must be finite and in
+`(0, 120]`. After a write has a known memory ID, Add waits for a valid point read
+and retrieval of that exact write. Existing known-ID inflight rows (including
+legacy rows) use the same path. A valid null read or valid retrieval result that
+has not yet included the write triggers bounded exponential backoff (50 ms up to
+500 ms). Verification never re-POSTs a known write. A successful point read is
+reused while waiting for retrieval; owner, ID and write-marker checks remain.
+
+A single monotonic polling deadline covers both stages, backend admission waits,
+and backoff. Each verification HTTP call is capped to the smaller of its usual
+timeout and the remaining budget, recalculated after scheduler admission. HTTPX
+uses per-phase I/O timeouts: this is not a hard cancellation timer for the full
+Add or a running socket operation. A result returned after the deadline is not
+accepted as verified. No new probe is issued after expiry.
+
+On polling expiry, or an HTTP timeout capped by the remaining visibility budget,
+Add returns the same retryable 503 and leaves the write inflight. `Retry-After`
+is the ceiling of the configured budget, bounded to 1–60 seconds. Later same-ID
+replay verifies without rewriting it. A shorter ordinary HTTP timeout retains its
+existing error mapping. Invalid JSON/schema, wrong-owner/ID/marker, inactive memory, authorization failures and arbitrary
+upstream errors are not treated as visibility lag. Existing error mappings are
+preserved. Only after both checks succeed may the journal mark stored/completed.
+The policy is per write/part, not a deadline for an entire multi-message Add.
+It mitigates temporary visibility; backend consistency configuration still needs
+to match the service's read-after-write requirements.
+
 ## Journal performance logs
 
 The adapter emits JSON message bodies through the existing `uvicorn.error`

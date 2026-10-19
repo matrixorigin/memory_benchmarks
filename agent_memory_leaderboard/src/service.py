@@ -77,19 +77,18 @@ class MemoryAdapter:
         if state not in {"pending", "inflight"}:
             raise AdapterError(503, "Unsupported journal write state; check adapter version")
         marker = body["extra_metadata"]["aml_write"]
-        if state == "inflight" and protocol == LEGACY_PROTOCOL:
-            memory = (
-                self.memoria.get(owner, memory_id)
-                if memory_id
-                else self.memoria.recover(owner, marker)
-            )
+        if state == "inflight" and memory_id:
+            # Verification below handles temporary unreadability without a POST.
+            pass
+        elif state == "inflight" and protocol == LEGACY_PROTOCOL:
+            memory = self.memoria.recover(owner, marker)
             if memory is None:
-                # A timeout/crash doesn't prove that Memoria stopped processing.
-                # Reposting here could create duplicates, even after a negative query.
+                # A negative query cannot prove an unknown legacy write failed.
                 raise AdapterError(503, "Prior write outcome is unknown; retry the same Add later")
-        elif state == "inflight" and memory_id:
-            memory = self.memoria.get(owner, memory_id)
+            memory_id = memory.memory_id
         else:
+            # Pending rows and atomic inflight rows without an ID can both replay
+            # the receipt key. Unknown legacy inflight rows are handled above.
             # A pending legacy write is known not to have been sent/committed.
             # Persist the new protocol before POST so even a pre-send crash can
             # safely replay it. Unknown legacy inflight writes never enter here.
@@ -101,13 +100,10 @@ class MemoryAdapter:
                 if exc.write_not_sent:
                     self.journal.record(key, position, "pending", protocol=protocol)
                 raise
-            self.journal.record(key, position, "inflight", memory.memory_id, protocol=protocol)
+            memory_id = memory.memory_id
+            self.journal.record(key, position, "inflight", memory_id, protocol=protocol)
 
-        # A point read alone does not prove visibility through the retrieval path.
-        persisted = self.memoria.get(owner, memory.memory_id)
-        if persisted.extra_metadata.get("aml_write") != marker:
-            raise AdapterError(502, "Memoria did not persist the write marker")
-        self.memoria.verify_searchable(owner, persisted, marker)
+        persisted = self.memoria.wait_for_visibility(owner, memory_id, marker)
         self.journal.record(key, position, "stored", persisted.memory_id, protocol=protocol)
 
     def search(self, request: SearchRequest) -> SearchResponse:

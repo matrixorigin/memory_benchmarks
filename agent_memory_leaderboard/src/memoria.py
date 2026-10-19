@@ -1,5 +1,7 @@
 """HTTP boundary: use an owner-scoped master credential, never caller headers."""
 
+import math
+import time
 from typing import Annotated, Any
 from urllib.parse import quote
 
@@ -7,7 +9,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .config import Settings
-from .errors import AdapterError
+from .errors import AdapterError, VisibilityPending
 from .models import Nonblank
 from .scheduling import BackendScheduler
 
@@ -36,9 +38,35 @@ class Memoria:
             settings.backend_queue_timeout_seconds,
         )
 
-    def request(self, method: str, path: str, owner: str, body: dict | None = None) -> Any:
+    def _visibility_timeout(self) -> AdapterError:
+        delay = str(max(1, min(60, math.ceil(self.settings.visibility_timeout_seconds))))
+        return AdapterError(503, "Memoria write visibility timed out; retry Add", retry_after=delay)
+
+    def _remaining_visibility(self, deadline: float) -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise self._visibility_timeout()
+        return remaining
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        owner: str,
+        body: dict | None = None,
+        *,
+        deadline: float | None = None,
+    ) -> Any:
+        if deadline is not None:
+            self._remaining_visibility(deadline)
+        visibility_limited = False
         try:
-            with self.scheduler.slot():
+            with self.scheduler.slot(deadline=deadline):
+                timeout = self.settings.timeout_seconds
+                if deadline is not None:
+                    remaining = self._remaining_visibility(deadline)
+                    visibility_limited = remaining <= timeout
+                    timeout = min(timeout, remaining)
                 response = self.client.request(
                     method,
                     self.settings.memoria_url.rstrip("/") + path,
@@ -47,12 +75,18 @@ class Memoria:
                         "X-User-Id": owner,
                     },
                     json=body,
-                    timeout=self.settings.timeout_seconds,
+                    timeout=timeout,
                 )
-        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
-            raise AdapterError(503, "Memoria connection unavailable", write_not_sent=True) from exc
         except httpx.TimeoutException as exc:
+            if deadline is not None and (visibility_limited or time.monotonic() >= deadline):
+                raise self._visibility_timeout() from exc
+            if isinstance(exc, (httpx.ConnectTimeout, httpx.PoolTimeout)):
+                raise AdapterError(
+                    503, "Memoria connection unavailable", write_not_sent=True
+                ) from exc
             raise AdapterError(504, "Memoria request timed out") from exc
+        except httpx.ConnectError as exc:
+            raise AdapterError(503, "Memoria connection unavailable", write_not_sent=True) from exc
         except httpx.RequestError as exc:
             raise AdapterError(502, "Memoria transport failed") from exc
 
@@ -121,11 +155,11 @@ class Memoria:
         payload = {**body, "idempotency_key": marker, "branch": ADAPTER_BRANCH}
         return self.memory(self.request("POST", IDEMPOTENT_PATH, owner, payload), owner)
 
-    def get(self, owner: str, memory_id: str) -> Memory:
+    def get(self, owner: str, memory_id: str, *, deadline: float | None = None) -> Memory:
         path = f"/v1/memories/{quote(memory_id, safe='')}?branch={ADAPTER_BRANCH}"
-        data = self.request("GET", path, owner)
+        data = self.request("GET", path, owner, deadline=deadline)
         if data is None:
-            raise AdapterError(503, "Memoria write is not yet readable")
+            raise VisibilityPending(503, "Memoria write is not yet readable")
         memory = self.memory(data, owner)
         if memory.memory_id != memory_id:
             raise AdapterError(502, "Memoria returned an unexpected memory ID")
@@ -166,7 +200,14 @@ class Memoria:
             raise AdapterError(502, "Memoria returned an invalid search response")
         return [self.memory(item, owner) for item in data]
 
-    def verify_searchable(self, owner: str, memory: Memory, marker: str) -> None:
+    def verify_searchable(
+        self,
+        owner: str,
+        memory: Memory,
+        marker: str,
+        *,
+        deadline: float | None = None,
+    ) -> None:
         data = self.request(
             "POST",
             "/v1/memories/search",
@@ -177,9 +218,37 @@ class Memoria:
                 "subject_id": marker,
                 "branch": ADAPTER_BRANCH,
             },
+            deadline=deadline,
         )
         if not isinstance(data, list):
             raise AdapterError(502, "Memoria returned an invalid visibility response")
         results = [self.memory(item, owner) for item in data]
-        if not any(item.memory_id == memory.memory_id for item in results):
-            raise AdapterError(503, "Memoria write is persisted but not yet searchable; retry Add")
+        matching = next((item for item in results if item.memory_id == memory.memory_id), None)
+        if matching is None:
+            raise VisibilityPending(
+                503, "Memoria write is persisted but not yet searchable; retry Add"
+            )
+        if matching.extra_metadata.get("aml_write") != marker:
+            raise AdapterError(502, "Memoria search returned an unexpected write marker")
+
+    def wait_for_visibility(self, owner: str, memory_id: str, marker: str) -> Memory:
+        # One polling budget covers point-read and retrieval verification. Never
+        # repeat a write here; a known ID remains recoverable on a later Add.
+        deadline = time.monotonic() + self.settings.visibility_timeout_seconds
+        delay = 0.05
+        persisted = None
+        while True:
+            self._remaining_visibility(deadline)
+            try:
+                if persisted is None:
+                    persisted = self.get(owner, memory_id, deadline=deadline)
+                    if persisted.extra_metadata.get("aml_write") != marker:
+                        raise AdapterError(502, "Memoria did not persist the write marker")
+                self.verify_searchable(owner, persisted, marker, deadline=deadline)
+                # A slow in-flight call must not report success after expiry.
+                self._remaining_visibility(deadline)
+                return persisted
+            except VisibilityPending:
+                remaining = self._remaining_visibility(deadline)
+                time.sleep(min(delay, remaining))
+                delay = min(delay * 2, 0.5)

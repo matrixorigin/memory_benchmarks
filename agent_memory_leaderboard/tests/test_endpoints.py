@@ -4,6 +4,7 @@ import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -295,6 +296,8 @@ def test_definitely_uncommitted_write_can_retry(settings, upstream, failure):
 
 
 def test_add_waits_for_read_visibility_then_retries_without_write(settings, upstream):
+    settings = replace(settings, visibility_timeout_seconds=0.01)
+
     def hidden(request, body, owner):
         if request.method == "GET":
             return httpx.Response(200, content="null")
@@ -625,6 +628,8 @@ def test_health_is_unauthenticated_with_protected_endpoints(settings, upstream):
 
 
 def test_add_requires_search_visibility_not_just_point_read(settings, upstream):
+    settings = replace(settings, visibility_timeout_seconds=0.01)
+
     def delayed_index(request, body, owner):
         if request.url.path == "/v1/memories/search":
             return httpx.Response(200, json=[])
@@ -633,7 +638,7 @@ def test_add_requires_search_visibility_not_just_point_read(settings, upstream):
     with running(settings, upstream) as client:
         response = client.post("/add", json=addition())
         assert response.status_code == 503
-        assert "not yet searchable" in response.text
+        assert "visibility timed out" in response.text
         assert len(upstream.memories) == 1
         upstream.hook = None
         assert client.post("/add", json=addition()).status_code == 200

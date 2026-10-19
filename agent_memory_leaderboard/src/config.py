@@ -13,6 +13,7 @@ class Settings:
     state_dir: Path = Path("var")
     namespace: str = "agent-memory-leaderboard"
     timeout_seconds: float = 120
+    visibility_timeout_seconds: float = field(default=10, kw_only=True)
     backend_max_concurrency: int = 0
     backend_requests_per_second: float = 0
     backend_queue_timeout_seconds: float = 120
@@ -50,6 +51,11 @@ class Settings:
         if not math.isfinite(self.journal_slow_ms) or self.journal_slow_ms < 0:
             raise ValueError("ADAPTER_JOURNAL_SLOW_MS must be nonnegative and finite")
         if (
+            not math.isfinite(self.visibility_timeout_seconds)
+            or not 0 < self.visibility_timeout_seconds <= 120
+        ):
+            raise ValueError("MEMORIA_VISIBILITY_TIMEOUT_SECONDS must be in (0, 120]")
+        if (
             not math.isfinite(self.backend_requests_per_second)
             or self.backend_requests_per_second < 0
         ):
@@ -72,6 +78,7 @@ class Settings:
             state_dir=Path(os.getenv("ADAPTER_STATE_DIR", "var")),
             namespace=os.getenv("MEMORIA_NAMESPACE", "agent-memory-leaderboard"),
             timeout_seconds=float(os.getenv("MEMORIA_TIMEOUT_SECONDS", "120")),
+            visibility_timeout_seconds=float(os.getenv("MEMORIA_VISIBILITY_TIMEOUT_SECONDS", "10")),
             backend_max_concurrency=int(os.getenv("MEMORIA_MAX_CONCURRENCY", "0")),
             backend_requests_per_second=float(os.getenv("MEMORIA_REQUESTS_PER_SECOND", "0")),
             backend_queue_timeout_seconds=float(os.getenv("MEMORIA_QUEUE_TIMEOUT_SECONDS", "120")),
