@@ -98,7 +98,8 @@ def test_probes_work_while_business_threads_are_saturated(settings):
             with ThreadPoolExecutor(max_workers=42) as pool:
                 searches = [
                     pool.submit(
-                        client.post, "/search",
+                        client.post,
+                        "/search",
                         headers={"Authorization": "Bearer client-secret"},
                         json={"user_id": f"user-{i}", "query": "test", "top_k": 1},
                     )
@@ -143,3 +144,45 @@ def test_readiness_has_no_waiting_queue_and_does_not_block_liveness(settings):
                 assert first.result(timeout=5).status_code == 200
             # The probe slot is returned after completion.
             assert client.get("/ready").status_code == 200
+
+
+def test_readiness_does_not_queue_behind_an_active_journal_transaction(settings):
+    from src.journal import Journal
+
+    # The probe uses its own read path, independent of the process-local mutex
+    # and the cross-process gate held by a different Journal instance.
+    journal = Journal(settings.state_dir)
+    with httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200))) as http:
+        with TestClient(create_app(settings, client=http)) as client:
+            with ThreadPoolExecutor() as pool:
+                with journal.connect("record") as db:
+                    db.execute("INSERT INTO requests VALUES ('uncommitted', 'fingerprint', 0)")
+                    probe = pool.submit(client.get, "/ready")
+                    assert probe.result(timeout=1).status_code == 200
+
+
+def test_readiness_busy_read_is_bounded_and_not_reported_healthy(settings):
+    import sqlite3
+    import time
+
+    with httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200))) as http:
+        with TestClient(create_app(settings, client=http)) as client:
+            with sqlite3.connect(settings.state_dir / "requests.sqlite3") as blocker:
+                blocker.execute("BEGIN EXCLUSIVE")
+                started = time.monotonic()
+                assert client.get("/ready").status_code == 503
+                assert time.monotonic() - started < 1
+            assert client.get("/ready").status_code == 200
+
+
+def test_readiness_does_not_recreate_missing_journal(settings):
+    with httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200))) as http:
+        with TestClient(create_app(settings, client=http)) as client:
+            path = settings.state_dir / "requests.sqlite3"
+            backup = path.with_suffix(".backup")
+            path.rename(backup)
+            try:
+                assert client.get("/ready").status_code == 503
+                assert not path.exists()
+            finally:
+                backup.rename(path)

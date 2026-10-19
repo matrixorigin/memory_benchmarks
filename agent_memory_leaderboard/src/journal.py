@@ -1,7 +1,10 @@
 """Durable idempotency state, with process-safe locks on a shared local disk."""
 
 import fcntl
+import math
 import sqlite3
+import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -20,17 +23,28 @@ class TimedConnection:
     def execute(self, statement, parameters=()):
         return self.timing.run("sql", self.db.execute, statement, parameters)
 
-    def executescript(self, script):
-        return self.timing.run("sql", self.db.executescript, script)
-
 
 class Journal:
-    def __init__(self, directory: Path, *, log_all_operations=False, slow_ms=100):
+    def __init__(
+        self,
+        directory: Path,
+        *,
+        log_all_operations=False,
+        slow_ms=100,
+        queue_timeout_seconds=5.0,
+    ):
+        if not math.isfinite(queue_timeout_seconds) or not 0 < queue_timeout_seconds <= 120:
+            raise ValueError("Journal queue timeout must be in (0, 120]")
+        self.queue_timeout_seconds = queue_timeout_seconds
         self.metrics = JournalMetrics(log_all_operations=log_all_operations, slow_ms=slow_ms)
         directory.mkdir(parents=True, exist_ok=True)
         self.locks = directory / "locks"
         self.locks.mkdir(exist_ok=True)
         self.path = directory / "requests.sqlite3"
+        # A separate, never-unlinked inode coordinates short journal operations
+        # across processes. The local mutex avoids a flock polling herd of threads.
+        self.gate_path = directory / "sqlite.lock"
+        self._connection_mutex = threading.Lock()
         with self.connect("initialize") as db:
             # Serialize schema inspection and upgrade across app processes. Existing
             # writes must remain legacy: metadata markers are not atomic receipts.
@@ -56,9 +70,55 @@ class Journal:
             if "protocol" not in columns:
                 db.execute("ALTER TABLE writes ADD COLUMN protocol TEXT NOT NULL DEFAULT 'legacy'")
 
+    def _acquire_connection_slot(self):
+        deadline = time.monotonic() + self.queue_timeout_seconds
+        if not self._connection_mutex.acquire(timeout=self.queue_timeout_seconds):
+            raise TimeoutError
+        handle = None
+        try:
+            handle = self.gate_path.open("a")
+            while True:
+                try:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    return handle
+                except BlockingIOError:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError from None
+                    time.sleep(min(0.01, remaining))
+        except BaseException:
+            try:
+                if handle is not None:
+                    handle.close()
+            finally:
+                self._connection_mutex.release()
+            raise
+
+    @contextmanager
+    def _connection_slot(self, timing):
+        try:
+            handle = timing.run("queue", self._acquire_connection_slot)
+        except TimeoutError as exc:
+            timing.error_category = "journal_queue_timeout"
+            timing.failed_phase = "queue"
+            raise AdapterError(503, "Idempotency journal is busy; retry Add") from exc
+        except OSError as exc:
+            timing.error_category = "journal_lock_io_error"
+            timing.failed_phase = "queue"
+            raise AdapterError(503, "Idempotency journal lock unavailable") from exc
+        try:
+            yield
+        finally:
+            # Closing releases flock even after rollback/errors. Never unlink:
+            # another process may already be waiting on this same inode.
+            try:
+                handle.close()
+            finally:
+                self._connection_mutex.release()
+
     @contextmanager
     def connect(self, operation="probe"):
-        with self.metrics.operation(operation) as timing:
+        with self.metrics.operation(operation) as timing, self._connection_slot(timing):
             db = None
             try:
                 db = timing.run("connect", sqlite3.connect, self.path, timeout=5)
@@ -78,6 +138,21 @@ class Journal:
                             # must roll back before this connection is closed.
                             timing.run("rollback", db.rollback)
                             raise
+            except sqlite3.Error as exc:
+                raise AdapterError(503, "Idempotency journal unavailable") from exc
+            finally:
+                if db is not None:
+                    timing.run("close", db.close)
+
+    def probe(self) -> None:
+        # A read-only probe must not join the writer queue or configure SQLite.
+        # BUSY/corruption/missing storage still fail closed, with a short wait.
+        with self.metrics.operation("probe") as timing:
+            db = None
+            try:
+                uri = self.path.absolute().as_uri() + "?mode=ro"
+                db = timing.run("connect", sqlite3.connect, uri, uri=True, timeout=0.05)
+                timing.run("sql", db.execute, "SELECT key FROM requests LIMIT 1").fetchone()
             except sqlite3.Error as exc:
                 raise AdapterError(503, "Idempotency journal unavailable") from exc
             finally:
