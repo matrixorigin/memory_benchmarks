@@ -1,10 +1,11 @@
 import hashlib
 import json
+from itertools import chain, pairwise
 
 from .config import Settings
 from .errors import AdapterError
 from .ingestion import message_parts
-from .journal import IDEMPOTENT_PROTOCOL, LEGACY_PROTOCOL, Journal
+from .journal import LEGACY_PROTOCOL, Journal
 from .memoria import Memoria
 from .models import AddRequest, AddResponse, Evidence, SearchRequest, SearchResponse, text_content
 
@@ -32,10 +33,14 @@ class MemoryAdapter:
             key = digest([self.settings.memoria_url.rstrip("/"), owner, request.request_id])
             fingerprint = digest(request.model_dump())
             with self.journal.lock(key):
-                if not self.journal.begin(key, fingerprint):
-                    for position, body in enumerate(self.write_bodies(request, key)):
-                        self.write(owner, key, position, body)
-                    self.journal.complete(key)
+                # One-item lookahead identifies the last chunk without buffering
+                # the entire request, so its stored marker and completion commit together.
+                bodies = chain(self.write_bodies(request, key), [None])
+                for position, (body, following) in enumerate(pairwise(bodies)):
+                    prepared = self.journal.prepare_write(key, fingerprint, position)
+                    if prepared is None:
+                        break
+                    self.write(owner, key, position, body, prepared, last=following is None)
             return AddResponse(
                 request_id=request.request_id,
                 user_id=request.user_id,
@@ -68,14 +73,22 @@ class MemoryAdapter:
                     body["observed_at"] = observed_at
                 yield body
 
-    def write(self, owner: str, key: str, position: int, body: dict) -> None:
-        state, memory_id, protocol = self.journal.state(key, position)
-        if protocol not in {LEGACY_PROTOCOL, IDEMPOTENT_PROTOCOL}:
-            raise AdapterError(503, "Unsupported journal write protocol; check adapter version")
+    def write(
+        self,
+        owner: str,
+        key: str,
+        position: int,
+        body: dict,
+        prepared: tuple[str, str | None, str],
+        *,
+        last: bool = False,
+    ) -> None:
+        state, memory_id, protocol = prepared
         if state == "stored":
+            # Older journals may have persisted the final chunk but not complete.
+            if last:
+                self.journal.complete(key)
             return
-        if state not in {"pending", "inflight"}:
-            raise AdapterError(503, "Unsupported journal write state; check adapter version")
         marker = body["extra_metadata"]["aml_write"]
         if state == "inflight" and memory_id:
             # Verification below handles temporary unreadability without a POST.
@@ -87,13 +100,8 @@ class MemoryAdapter:
                 raise AdapterError(503, "Prior write outcome is unknown; retry the same Add later")
             memory_id = memory.memory_id
         else:
-            # Pending rows and atomic inflight rows without an ID can both replay
-            # the receipt key. Unknown legacy inflight rows are handled above.
-            # A pending legacy write is known not to have been sent/committed.
-            # Persist the new protocol before POST so even a pre-send crash can
-            # safely replay it. Unknown legacy inflight writes never enter here.
-            protocol = IDEMPOTENT_PROTOCOL
-            self.journal.record(key, position, "inflight", protocol=protocol)
+            # prepare_write committed the atomic intent before this call. Reusing
+            # an existing atomic inflight row needs no additional SQLite commit.
             try:
                 memory = self.memoria.store_idempotent(owner, body, marker)
             except AdapterError as exc:
@@ -104,7 +112,14 @@ class MemoryAdapter:
             self.journal.record(key, position, "inflight", memory_id, protocol=protocol)
 
         persisted = self.memoria.wait_for_visibility(owner, memory_id, marker)
-        self.journal.record(key, position, "stored", persisted.memory_id, protocol=protocol)
+        self.journal.record(
+            key,
+            position,
+            "stored",
+            persisted.memory_id,
+            protocol=protocol,
+            complete_request=last,
+        )
 
     def search(self, request: SearchRequest) -> SearchResponse:
         memories = self.memoria.search(

@@ -193,30 +193,71 @@ class Journal:
                         timing.error_category = "lock_io_error"
                         raise
 
+    @staticmethod
+    def _begin(db, key: str, fingerprint: str) -> bool:
+        row = db.execute(
+            "SELECT fingerprint, complete FROM requests WHERE key = ?", (key,)
+        ).fetchone()
+        if row:
+            if row[0] != fingerprint:
+                raise AdapterError(
+                    400,
+                    "request_id was already used with a different payload; "
+                    "restore the original payload",
+                )
+            return bool(row[1])
+        db.execute("INSERT INTO requests(key, fingerprint) VALUES (?, ?)", (key, fingerprint))
+        return False
+
     def begin(self, key: str, fingerprint: str) -> bool:
         with self.connect("begin") as db:
-            row = db.execute(
-                "SELECT fingerprint, complete FROM requests WHERE key = ?", (key,)
-            ).fetchone()
-            if row:
-                if row[0] != fingerprint:
-                    raise AdapterError(
-                        400,
-                        "request_id was already used with a different payload; "
-                        "restore the original payload",
-                    )
-                return bool(row[1])
-            db.execute("INSERT INTO requests(key, fingerprint) VALUES (?, ?)", (key, fingerprint))
-            return False
+            return self._begin(db, key, fingerprint)
+
+    @staticmethod
+    def _state(db, key: str, position: int) -> tuple[str, str | None, str]:
+        row = db.execute(
+            "SELECT state, memory_id, protocol FROM writes WHERE request_key = ? AND position = ?",
+            (key, position),
+        ).fetchone()
+        return row if row else ("pending", None, IDEMPOTENT_PROTOCOL)
 
     def state(self, key: str, position: int) -> tuple[str, str | None, str]:
         with self.connect("state") as db:
-            row = db.execute(
-                "SELECT state, memory_id, protocol FROM writes "
-                "WHERE request_key = ? AND position = ?",
-                (key, position),
-            ).fetchone()
-            return row if row else ("pending", None, IDEMPOTENT_PROTOCOL)
+            return self._state(db, key, position)
+
+    @staticmethod
+    def _record(db, key, position, state, memory_id, protocol):
+        db.execute(
+            "INSERT INTO writes(request_key, position, state, memory_id, protocol) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(request_key, position) DO UPDATE SET "
+            "state = excluded.state, memory_id = excluded.memory_id, "
+            "protocol = excluded.protocol",
+            (key, position, state, memory_id, protocol),
+        )
+
+    def prepare_write(
+        self, key: str, fingerprint: str, position: int
+    ) -> tuple[str, str | None, str] | None:
+        """Register the request and persist send intent in one durable transaction.
+
+        Caller holds lock(key) throughout Add. None denotes a completed replay.
+        Legacy unknown outcomes must never be converted to atomic receipts.
+        """
+        with self.connect("prepare_write") as db:
+            if self._begin(db, key, fingerprint):
+                return None
+            state, memory_id, protocol = self._state(db, key, position)
+            if protocol not in {LEGACY_PROTOCOL, IDEMPOTENT_PROTOCOL}:
+                raise AdapterError(503, "Unsupported journal write protocol; check adapter version")
+            if state not in {"pending", "inflight", "stored"}:
+                raise AdapterError(503, "Unsupported journal write state; check adapter version")
+            if state == "pending":
+                # Pending legacy writes are known not to have been sent. Persist
+                # the atomic protocol before HTTP, including on the first chunk.
+                state, memory_id, protocol = "inflight", None, IDEMPOTENT_PROTOCOL
+                self._record(db, key, position, state, memory_id, protocol)
+            return state, memory_id, protocol
 
     def record(
         self,
@@ -226,16 +267,14 @@ class Journal:
         memory_id: str | None = None,
         *,
         protocol: str,
+        complete_request: bool = False,
     ) -> None:
+        if complete_request and state != "stored":
+            raise ValueError("Only a verified stored write can complete a request")
         with self.connect("record") as db:
-            db.execute(
-                "INSERT INTO writes(request_key, position, state, memory_id, protocol) "
-                "VALUES (?, ?, ?, ?, ?) "
-                "ON CONFLICT(request_key, position) DO UPDATE SET "
-                "state = excluded.state, memory_id = excluded.memory_id, "
-                "protocol = excluded.protocol",
-                (key, position, state, memory_id, protocol),
-            )
+            self._record(db, key, position, state, memory_id, protocol)
+            if complete_request:
+                db.execute("UPDATE requests SET complete = 1 WHERE key = ?", (key,))
 
     def complete(self, key: str) -> None:
         with self.connect("complete") as db:

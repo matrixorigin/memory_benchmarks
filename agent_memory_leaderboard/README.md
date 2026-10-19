@@ -219,6 +219,33 @@ outlasts that short timeout still reports not-ready; BUSY is not cached as healt
 This checks readability, not durable-write capacity. The independent upstream
 health probe remains unchanged.
 
+### Durable transaction boundaries
+
+The Add path combines request registration and the first atomic send intent in
+one transaction. Each subsequent chunk also validates its state and persists
+any required send intent in one journal operation. Already-inflight atomic
+receipts can be replayed without rewriting identical intent state. Unknown
+legacy outcomes retain the existing query-only recovery policy.
+
+The backend acknowledgment (memory ID) is still committed before visibility
+verification. Once the final chunk is verified, its stored marker and request
+completion are committed together. A new one-chunk Add therefore uses three
+durable commits instead of five; a new N-chunk Add uses 3N instead of 3N+2.
+Completed replays perform no write transaction. Legacy journals whose last
+chunk is stored but whose request is incomplete still complete on retry.
+
+Run the isolated synthetic benchmark with
+`uv run python scripts/benchmark_journal.py`. Use `--commit-delay-ms 10` to
+inject a fixed delay per commit, or `--source-root /path/to/checkout/agent_memory_leaderboard`
+to compare another checkout with the same harness. It uses temporary storage
+and an in-memory synthetic backend, never calls a service, and reports only
+aggregate counts and timings. Its results are not deployment capacity estimates.
+
+These changes retain `synchronous=FULL`, the existing journal mode and schema,
+and the per-request and cross-process locks. No SQLite transaction or global
+journal gate spans a backend HTTP call. This reduces commit overhead but does
+not remove SQLite's single-writer limit or establish deployment throughput.
+
 ### Existing journals and rollback
 
 Startup upgrades the four-column `writes` table transactionally, adding a

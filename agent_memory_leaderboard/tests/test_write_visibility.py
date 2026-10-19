@@ -104,7 +104,9 @@ def test_known_id_inflight_recovery_waits_without_reposting(
                 return httpx.Response(200, content="null")
 
     upstream.hook = lag
-    MemoryAdapter(boundary.settings, boundary, journal).write(owner, "synthetic", 0, body)
+    MemoryAdapter(boundary.settings, boundary, journal).write(
+        owner, "synthetic", 0, body, journal.state("synthetic", 0)
+    )
     assert len(reads) == 2 and len(upstream.writes) == 1
     assert journal.state("synthetic", 0) == ("stored", memory.memory_id, protocol)
 

@@ -50,8 +50,8 @@ def test_default_add_summary_includes_idempotent_replay_without_payloads(tmp_pat
         )
     summaries = events(caplog, "journal_add_summary")
     assert [e["http_status"] for e in summaries] == [200, 200, 400]
-    assert summaries[0]["operations"]["record"]["count"] == 3
-    assert summaries[1]["operations"]["begin"]["count"] == 1
+    assert summaries[0]["operations"]["record"]["count"] == 2
+    assert summaries[1]["operations"]["prepare_write"]["count"] == 1
     assert "record" not in summaries[1]["operations"]
     assert len({e["add_trace"] for e in summaries}) == 3
     assert all(0 <= e["journal_fraction"] <= 1.001 for e in summaries)

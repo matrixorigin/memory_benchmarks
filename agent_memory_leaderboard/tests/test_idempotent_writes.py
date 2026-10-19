@@ -87,17 +87,17 @@ def _exit_after_inflight(directory):
         state_dir=directory,
     )
     journal = Journal(directory)
-    record = journal.record
+    prepare = journal.prepare_write
 
     def interrupt(*args, **kwargs):
-        record(*args, **kwargs)
+        prepare(*args, **kwargs)
         os._exit(23)
 
     def unexpected_post(request):
         (directory / "unexpected-post").touch()
         raise AssertionError("Process should exit before HTTP")
 
-    journal.record = interrupt
+    journal.prepare_write = interrupt
     with httpx.Client(transport=httpx.MockTransport(unexpected_post)) as http:
         adapter = MemoryAdapter(settings, Memoria(settings, http), journal)
         adapter.add(AddRequest.model_validate(addition()))
