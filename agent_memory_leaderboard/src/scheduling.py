@@ -73,12 +73,15 @@ class BackendScheduler:
             self.waiters[0].set()
 
     @contextmanager
-    def slot(self):
+    def slot(self, *, deadline: float | None = None):
         if not self.concurrency and not self.interval:
             yield
             return
         ticket = Event()
-        deadline = time.monotonic() + self.queue_timeout
+        deadline = min(
+            time.monotonic() + self.queue_timeout,
+            deadline if deadline is not None else math.inf,
+        )
         acquired = False
         started = 0.0
         with self.lock:

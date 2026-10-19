@@ -13,3 +13,7 @@ class AdapterError(Exception):
         self.retry_after = retry_after
         # Only true when it is certain that a failed POST cannot have committed.
         self.write_not_sent = write_not_sent
+
+
+class VisibilityPending(AdapterError):
+    """A valid empty read/retrieval result; other 503s must not enter this retry loop."""
