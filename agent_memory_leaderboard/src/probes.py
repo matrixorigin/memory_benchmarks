@@ -135,7 +135,12 @@ def run(args):
 
         begin = time.monotonic()
         try:
-            with httpx.Client(timeout=args.timeout, trust_env=False) as client:
+            with httpx.Client(
+                timeout=httpx.Timeout(
+                    args.timeout, connect=min(30, args.timeout), pool=min(30, args.timeout)
+                ),
+                trust_env=False,
+            ) as client:
                 result = call_adapter(
                     client,
                     adapter_url,
@@ -168,7 +173,12 @@ def run(args):
     def explain(user, query):
         if not settings:
             return None
-        with httpx.Client(timeout=args.timeout, trust_env=False) as client:
+        with httpx.Client(
+            timeout=httpx.Timeout(
+                args.timeout, connect=min(30, args.timeout), pool=min(30, args.timeout)
+            ),
+            trust_env=False,
+        ) as client:
             response = client.post(
                 settings.memoria_url + "/v1/memories/search",
                 headers={

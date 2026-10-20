@@ -8,6 +8,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from .budget import RequestBudgetExceeded
+from .budget import remaining as budget_remaining
 from .errors import AdapterError
 from .journal_metrics import JournalMetrics
 
@@ -21,6 +23,7 @@ class TimedConnection:
         self.timing = timing
 
     def execute(self, statement, parameters=()):
+        budget_remaining(float("inf"))
         return self.timing.run("sql", self.db.execute, statement, parameters)
 
 
@@ -31,7 +34,7 @@ class Journal:
         *,
         log_all_operations=False,
         slow_ms=100,
-        queue_timeout_seconds=5.0,
+        queue_timeout_seconds=30.0,
     ):
         if not math.isfinite(queue_timeout_seconds) or not 0 < queue_timeout_seconds <= 120:
             raise ValueError("Journal queue timeout must be in (0, 120]")
@@ -71,8 +74,9 @@ class Journal:
                 db.execute("ALTER TABLE writes ADD COLUMN protocol TEXT NOT NULL DEFAULT 'legacy'")
 
     def _acquire_connection_slot(self):
-        deadline = time.monotonic() + self.queue_timeout_seconds
-        if not self._connection_mutex.acquire(timeout=self.queue_timeout_seconds):
+        queue_budget = budget_remaining(self.queue_timeout_seconds)
+        deadline = time.monotonic() + queue_budget
+        if not self._connection_mutex.acquire(timeout=queue_budget):
             raise TimeoutError
         handle = None
         try:
@@ -98,7 +102,17 @@ class Journal:
     def _connection_slot(self, timing):
         try:
             handle = timing.run("queue", self._acquire_connection_slot)
+        except RequestBudgetExceeded:
+            timing.error_category = "request_budget_exhausted"
+            timing.failed_phase = "queue"
+            raise
         except TimeoutError as exc:
+            try:
+                budget_remaining(self.queue_timeout_seconds)
+            except RequestBudgetExceeded:
+                timing.error_category = "request_budget_exhausted"
+                timing.failed_phase = "queue"
+                raise
             timing.error_category = "journal_queue_timeout"
             timing.failed_phase = "queue"
             raise AdapterError(503, "Idempotency journal is busy; retry Add") from exc
@@ -121,7 +135,7 @@ class Journal:
         with self.metrics.operation(operation) as timing, self._connection_slot(timing):
             db = None
             try:
-                db = timing.run("connect", sqlite3.connect, self.path, timeout=5)
+                db = timing.run("connect", sqlite3.connect, self.path, timeout=budget_remaining(5))
                 timing.run("setup", db.execute, "PRAGMA synchronous = FULL")
                 try:
                     yield TimedConnection(db, timing)

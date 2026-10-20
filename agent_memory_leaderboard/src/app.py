@@ -8,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
+from .budget import request_budget
 from .config import Settings
 from .errors import AdapterError
 from .journal import Journal
@@ -127,9 +128,12 @@ def create_app(settings: Settings | None = None, *, client: httpx.Client | None 
 
     @app.post("/add", response_model=AddResponse, dependencies=[Depends(authenticate)])
     async def add(request: AddRequest):
-        async with admission.slot():
-            # Keep admission until the write thread finishes and records its outcome.
-            return await anyio.to_thread.run_sync(adapter.add, request, limiter=business_threads)
+        with request_budget(settings.request_timeout_seconds):
+            async with admission.slot():
+                # Keep admission until the write thread finishes and records its outcome.
+                return await anyio.to_thread.run_sync(
+                    adapter.add, request, limiter=business_threads
+                )
 
     @app.post(
         "/search",
@@ -138,7 +142,10 @@ def create_app(settings: Settings | None = None, *, client: httpx.Client | None 
         dependencies=[Depends(authenticate)],
     )
     async def search(request: SearchRequest):
-        async with admission.slot():
-            return await anyio.to_thread.run_sync(adapter.search, request, limiter=business_threads)
+        with request_budget(settings.request_timeout_seconds):
+            async with admission.slot():
+                return await anyio.to_thread.run_sync(
+                    adapter.search, request, limiter=business_threads
+                )
 
     return app

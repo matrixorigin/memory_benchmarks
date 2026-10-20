@@ -195,7 +195,7 @@ never held across a Memoria HTTP request. The existing nonblocking per-request
 lock and its HTTP 409 behavior are unchanged.
 
 `ADAPTER_JOURNAL_QUEUE_TIMEOUT_SECONDS` sets the slot acquisition budget
-(including both waits), default `5`, finite and in `(0, 120]`. It is independent
+(including both waits), default `30`, finite and in `(0, 120]`. It is independent
 of the application request limit: raising capacity does not raise durable-write
 throughput, so choose the waiting budget explicitly. An exhausted
 wait returns a safe HTTP 503 and records `journal_queue_timeout`; lock-file I/O
@@ -299,7 +299,7 @@ payload. It does not retry Search 409/524 or malformed successful responses.
 
 ## Write visibility budget
 
-`MEMORIA_VISIBILITY_TIMEOUT_SECONDS` defaults to `10`; it must be finite and in
+`MEMORIA_VISIBILITY_TIMEOUT_SECONDS` defaults to `60`; it must be finite and in
 `(0, 120]`. After a write has a known memory ID, Add waits for a valid point read
 and retrieval of that exact write. Existing known-ID inflight rows (including
 legacy rows) use the same path. A valid null read or valid retrieval result that
@@ -570,3 +570,35 @@ See [evaluation and diagnostics](benchmarks/EVALUATION.md) for label-free source
 attribution, optional Answer/Eval, model settings, private caches, checkpoints,
 source-time regression cases and bounded capacity probes. Retrieval remains the
 default and does not require answer/judge model credentials.
+
+
+### Layered timeout budgets
+
+Candidate defaults are journal-slot queue 30s, backend connection/pool 30s,
+backend read/write I/O 120s, visibility polling 60s, and admission/backend queue
+120s. `ADAPTER_JOURNAL_QUEUE_TIMEOUT_SECONDS` remains bounded to 120s. Raising
+its default from 5s reduces premature queue failures without increasing writer
+throughput. SQLite's own busy timeout remains 5s; probes retain their separate
+short read/health budgets.
+
+`MEMORIA_CONNECT_TIMEOUT_SECONDS` configures connection and HTTP pool waiting;
+`MEMORIA_TIMEOUT_SECONDS` configures individual read/write I/O waits.
+`MEMORIA_VISIBILITY_TIMEOUT_SECONDS` covers point-read plus search verification,
+and pending visibility never repeats a backend write.
+
+`ADAPTER_REQUEST_TIMEOUT_SECONDS` defaults to 1700s and accepts at most 1740s.
+It establishes one cooperative budget across admission, journal waits, all Add
+chunks and backend calls. Later phases use the remaining budget, and expiry
+returns retryable 504. It is not a hard HTTP stopwatch: an in-flight synchronous
+I/O or SQLite commit unwinds safely before its thread and admission permit are
+released. A late committed Add remains recoverable using the original request
+ID, even if the response is a timeout. The external API I/O window, probe and
+shutdown settings are independent. The local smoke, formal benchmark and probe
+clients use a 1800s I/O window (or the selected probe window) with a 30s maximum
+connection/pool wait; answer/judge model-call budgets remain unchanged.
+
+QA and AWS charts must pass the same explicit timeout values and deploy an
+image containing these settings. Unknown environment variables are silently
+ignored by older adapter images. These budgets are candidates to validate with
+64-client mixed and multi-message loads; no deployment or throughput guarantee
+is implied by changing them.

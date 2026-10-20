@@ -13,14 +13,16 @@ class Settings:
     state_dir: Path = Path("var")
     namespace: str = "agent-memory-leaderboard"
     timeout_seconds: float = 120
-    visibility_timeout_seconds: float = field(default=10, kw_only=True)
+    connect_timeout_seconds: float = field(default=30, kw_only=True)
+    request_timeout_seconds: float = field(default=1700, kw_only=True)
+    visibility_timeout_seconds: float = field(default=60, kw_only=True)
     backend_max_concurrency: int = 0
     backend_requests_per_second: float = 0
     backend_queue_timeout_seconds: float = 120
     max_active_requests: int = 40
     journal_log_all_operations: bool = False
     journal_slow_ms: float = 100
-    journal_queue_timeout_seconds: float = 5
+    journal_queue_timeout_seconds: float = 30
 
     def __post_init__(self) -> None:
         url = urlsplit(self.memoria_url)
@@ -35,6 +37,12 @@ class Settings:
             raise ValueError("MEMORIA_URL must be an HTTP(S) base URL without credentials")
         if not self.memoria_master_key or not self.namespace.strip():
             raise ValueError("MEMORIA_MASTER_KEY and MEMORIA_NAMESPACE must be nonempty")
+        for name, value, maximum in [
+            ("MEMORIA_CONNECT_TIMEOUT_SECONDS", self.connect_timeout_seconds, 120),
+            ("ADAPTER_REQUEST_TIMEOUT_SECONDS", self.request_timeout_seconds, 1740),
+        ]:
+            if not math.isfinite(value) or not 0 < value <= maximum:
+                raise ValueError(f"{name} must be in (0, {maximum}]")
         if not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0:
             raise ValueError("MEMORIA_TIMEOUT_SECONDS must be positive and finite")
         if (
@@ -78,7 +86,9 @@ class Settings:
             state_dir=Path(os.getenv("ADAPTER_STATE_DIR", "var")),
             namespace=os.getenv("MEMORIA_NAMESPACE", "agent-memory-leaderboard"),
             timeout_seconds=float(os.getenv("MEMORIA_TIMEOUT_SECONDS", "120")),
-            visibility_timeout_seconds=float(os.getenv("MEMORIA_VISIBILITY_TIMEOUT_SECONDS", "10")),
+            connect_timeout_seconds=float(os.getenv("MEMORIA_CONNECT_TIMEOUT_SECONDS", "30")),
+            request_timeout_seconds=float(os.getenv("ADAPTER_REQUEST_TIMEOUT_SECONDS", "1700")),
+            visibility_timeout_seconds=float(os.getenv("MEMORIA_VISIBILITY_TIMEOUT_SECONDS", "60")),
             backend_max_concurrency=int(os.getenv("MEMORIA_MAX_CONCURRENCY", "0")),
             backend_requests_per_second=float(os.getenv("MEMORIA_REQUESTS_PER_SECOND", "0")),
             backend_queue_timeout_seconds=float(os.getenv("MEMORIA_QUEUE_TIMEOUT_SECONDS", "120")),
@@ -86,6 +96,6 @@ class Settings:
             journal_log_all_operations=journal_logging in {"true", "1"},
             journal_slow_ms=float(os.getenv("ADAPTER_JOURNAL_SLOW_MS", "100")),
             journal_queue_timeout_seconds=float(
-                os.getenv("ADAPTER_JOURNAL_QUEUE_TIMEOUT_SECONDS", "5")
+                os.getenv("ADAPTER_JOURNAL_QUEUE_TIMEOUT_SECONDS", "30")
             ),
         )

@@ -8,6 +8,7 @@ from urllib.parse import quote
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from .budget import remaining as budget_remaining
 from .config import Settings
 from .errors import AdapterError, VisibilityPending
 from .models import Nonblank
@@ -43,6 +44,7 @@ class Memoria:
         return AdapterError(503, "Memoria write visibility timed out; retry Add", retry_after=delay)
 
     def _remaining_visibility(self, deadline: float) -> float:
+        budget_remaining(float("inf"))
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise self._visibility_timeout()
@@ -57,12 +59,13 @@ class Memoria:
         *,
         deadline: float | None = None,
     ) -> Any:
+        budget_remaining(float("inf"))
         if deadline is not None:
             self._remaining_visibility(deadline)
         visibility_limited = False
         try:
             with self.scheduler.slot(deadline=deadline):
-                timeout = self.settings.timeout_seconds
+                timeout = budget_remaining(self.settings.timeout_seconds)
                 if deadline is not None:
                     remaining = self._remaining_visibility(deadline)
                     visibility_limited = remaining <= timeout
@@ -75,9 +78,14 @@ class Memoria:
                         "X-User-Id": owner,
                     },
                     json=body,
-                    timeout=timeout,
+                    timeout=httpx.Timeout(
+                        timeout,
+                        connect=min(self.settings.connect_timeout_seconds, timeout),
+                        pool=min(self.settings.connect_timeout_seconds, timeout),
+                    ),
                 )
         except httpx.TimeoutException as exc:
+            budget_remaining(float("inf"))
             if deadline is not None and (visibility_limited or time.monotonic() >= deadline):
                 raise self._visibility_timeout() from exc
             if isinstance(exc, (httpx.ConnectTimeout, httpx.PoolTimeout)):

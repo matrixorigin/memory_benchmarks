@@ -200,7 +200,9 @@ def run(args):
 
     persist()
     try:
-        with httpx.Client(timeout=1800, trust_env=False) as http:
+        with httpx.Client(
+            timeout=httpx.Timeout(1800, connect=30, pool=30), trust_env=False
+        ) as http:
             http.get(args.adapter_url.rstrip("/") + "/health").raise_for_status()
             for conversation in selected:
                 sample = conversation["sample_id"]

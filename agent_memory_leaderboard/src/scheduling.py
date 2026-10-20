@@ -8,6 +8,7 @@ from threading import Event, Lock
 
 import anyio
 
+from .budget import remaining as budget_remaining
 from .errors import AdapterError
 
 
@@ -34,9 +35,10 @@ class RequestAdmission:
     @asynccontextmanager
     async def slot(self):
         try:
-            with anyio.fail_after(self.queue_timeout):
+            with anyio.fail_after(budget_remaining(self.queue_timeout)):
                 await self.permits.acquire()
         except TimeoutError as exc:
+            budget_remaining(self.queue_timeout)
             depth = self.permits.statistics().tasks_waiting + self.capacity + 1
             raise AdapterError(
                 503,
@@ -75,11 +77,12 @@ class BackendScheduler:
     @contextmanager
     def slot(self, *, deadline: float | None = None):
         if not self.concurrency and not self.interval:
+            budget_remaining(self.queue_timeout)
             yield
             return
         ticket = Event()
         deadline = min(
-            time.monotonic() + self.queue_timeout,
+            time.monotonic() + budget_remaining(self.queue_timeout),
             deadline if deadline is not None else math.inf,
         )
         acquired = False
@@ -92,6 +95,7 @@ class BackendScheduler:
                     now = time.monotonic()
                     remaining = deadline - now
                     if remaining <= 0:
+                        budget_remaining(self.queue_timeout)
                         depth = len(self.waiters) + self.active
                         raise AdapterError(
                             503,
