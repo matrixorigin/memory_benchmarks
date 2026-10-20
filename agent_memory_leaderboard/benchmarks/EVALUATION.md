@@ -25,6 +25,130 @@ were not found in the documentation checked on 2026-10-07. The prompts in
 See the [official documentation](https://agentmemories.ai/zh-cn/docs) and
 [competition readiness plan](../docs/competition-plan.md#正式参评前的工作).
 
+## Opt-in local content diagnostics
+
+Content diagnostics run **in the self-run benchmark client**, on the machine
+running that client. They do not add request-body logging to the deployed adapter,
+Memoria, or its journal. Official Smoke/Full calls do not pass through this client
+and must not be used as the source of diagnostic content. Normal benchmark runs
+leave the new feature disabled.
+
+From `agent_memory_leaderboard/`, this one command produces a local demonstration
+without contacting an adapter, model provider, or downloading tokenizer data:
+
+```sh
+uv run --locked --extra evaluation python -m scripts.content_diagnostics_demo \
+  --output-dir var/content-demo
+```
+
+Open the `local_report` HTML path printed at the end. This demonstration uses
+the independently authored fixture in `examples/content-diagnostics/`, simulated
+adapter/model responses, and a byte-counting test tokenizer. Its results verify
+the tool, **not Memoria quality or an AML score**. Choose another output directory
+for each run. Optional `--scenario missing-evidence`, `budget-exclusion`,
+`answer-failure` and `judge-failure` exercise different diagnostic signals;
+the latter two intentionally return benchmark exit code 1 with unscored questions.
+
+To evaluate that synthetic fixture against an actual test adapter:
+
+```sh
+# Set ADAPTER_API_KEY in the process environment if required by that adapter.
+uv run --locked python -m src.benchmark --kind locomo \
+  --dataset examples/content-diagnostics/input.json \
+  --adapter-url http://127.0.0.1:8000 --limit 1 --top-k 100 \
+  --output var/content-real/run.json --content-diagnostics \
+  --diagnostic-source examples/content-diagnostics/source.json
+```
+
+This is `retrieval` mode: no Answer/Judge calls are made, and the pages explicitly
+say those stages did not run. To include local Answer/Eval, configure the existing
+`BENCHMARK_ANSWER_*` and `BENCHMARK_JUDGE_*` settings and add `--mode answer-eval`.
+The existing model-service authorization and dataset transmission rules apply.
+
+The source declaration is required before any diagnostic run. Its format is
+demonstrated by `examples/content-diagnostics/source.json`:
+
+- `source_type` must be `synthetic` or `public`; official and unknown sources are
+  rejected. Official interface/database/log-derived copies remain prohibited even
+  if similar text is publicly downloadable elsewhere.
+- Record the independently obtained source URI/version, license or self-authored
+  local-use basis, allowed local evaluation/content-diagnostic uses, and retention
+  of 1–30 days. `dataset_sha256` must match the exact input file bytes.
+- Explicitly attest `independently_obtained`, `no_official_material`, and
+  `no_sensitive_content`. These declarations bind the reviewed input; **they do
+  not prove a license or detect misdeclared official/private data**. The operator
+  must independently verify permission, privacy and model-transmission conditions.
+- Do not put credentials, private endpoints, configuration, or personal details
+  in the declaration. Unknown declaration fields are not copied to the report.
+
+The new directory is `<private-dir>/<run-id>/content-diagnostics/`; by default
+`private-dir` is `.private` beside the ordinary output JSON. It contains an
+`index.html`, per-question pages, shared Add pages, a versioned `manifest.json`,
+and atomic gzip JSON records. Add history is recorded once per batch and linked
+from questions. Each question shows its actual query, ordered validated returned
+evidence, selected/excluded ranks, actual local model messages/outputs when run,
+existing metrics, errors, and retries. Prepared-but-unacknowledged Add records
+are explicitly not proof that a request was sent. Successful request/response
+snapshots come from the execution path, not later database reconstruction.
+
+No invented judge explanation or hidden model reasoning is requested. When the
+judge provides only `correct`, the page states that no explanation was supplied.
+Source mapping ambiguity, missing annotated sources, budget exclusion and model
+failure are diagnostic signals, not automatic root-cause findings.
+
+The defaults capture the first 100 questions and allow at most 64 MiB **for the
+new diagnostic directory**. Set `--diagnostic-max-questions` (1–1000) and
+`--diagnostic-max-mib` (2–512). Size accounting includes gzip records and HTML;
+individual uncompressed snapshots are bounded too. Reaching a limit omits content
+and explicitly marks incompleteness; it does not skip benchmark questions or
+silently improve scoring coverage. Existing answer caches, normal benchmark
+outputs, the input dataset and backend storage are outside this directory's cap.
+The readable pages are derived views and repeat some question/model text; this
+is bounded, not a claim of zero duplication.
+Content capture adds client disk work; use the payload-free load harness for
+capacity measurements. Search latency is sampled before diagnostic content I/O.
+
+Files use owner-only permissions. Known credential environment values, common
+token/auth patterns and endpoint URLs are masked in the new diagnostic display;
+HTML is escaped and has no scripts or external dependencies. Raw execution hashes
+and source/recall measurement remain separate from the redacted display. This is
+defense in depth, **not a general personal-data detector**: sensitive input is not
+eligible for this feature. Existing private answer caches retain their existing
+behavior; do not share them or treat them as sanitized diagnostic files.
+
+The deadline starts with the diagnostic directory's creation and is not extended
+by resume. Expired captures cannot resume or be compared. Review `expires_at` and
+remove the dedicated local directory by that deadline; this does not schedule an
+automatic cleanup job or delete backend memories/the journal. Keep declaration,
+limits, dataset and evaluation configuration unchanged for `--resume`. Resuming
+pending model work reuses the previous Search evidence and answer cache; a missing
+snapshot is disclosed rather than rebuilt from current database contents.
+A missing manifest requires a new run instead of restarting the retention clock.
+Pending model resume checks cached evidence against the captured content hashes;
+signature-verified answer-cache reuse is explicitly identified in the page.
+
+For comparable runs, create a new local paired report:
+
+```sh
+uv run --locked python -m src.content_diagnostics \
+  var/before/.private/<run-id>/content-diagnostics \
+  var/after/.private/<run-id>/content-diagnostics \
+  --output var/comparison.html
+```
+
+The HTML and adjacent JSON preserve per-question evidence-rank hashes, metrics,
+missing/unscored questions and full-run coverage. Dataset bytes, selected
+histories, Top K, mode and evaluator/model contracts must match. Code/backend
+changes are allowed; `runner_source_sha256` records the runner's actual source
+files, and the ordinary run's runtime label should identify the tested backend.
+Local-model comparisons are not equivalent to the platform's Answer/Eval.
+
+Content files are not uploaded to GitHub or CI artifacts. The benchmark workflow
+uses an explicit metadata-only artifact allowlist. Use ignored `var/` or a local
+directory outside the repository; custom `--private-dir` paths remain the
+operator's responsibility. Retain/share independently obtained public content
+only as permitted by its license and privacy requirements.
+
 ## Label-free ingestion and evidence attribution
 
 Only the original message text, speaker, role and source date enter Add. No

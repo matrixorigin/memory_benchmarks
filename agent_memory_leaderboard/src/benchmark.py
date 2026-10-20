@@ -13,6 +13,8 @@ from pathlib import Path
 import httpx
 
 from .checkpoint import checkpoint, load, question_dir, save, save_question
+from .content_diagnostics import ContentDiagnostics
+from .content_diagnostics import options as diagnostic_options
 from .datasets import ADAPTERS, DATASETS, normalize
 from .diagnostics import RetryAudit, adapter_reason_code
 from .evaluation import AnswerEvaluator, EvaluationConfig, ModelError
@@ -102,7 +104,13 @@ def summarize(report):
 
 def run(args):
     os.umask(0o077)
+    diagnostic_policy = diagnostic_options(args)
     raw = args.dataset.read_bytes()
+    if (
+        diagnostic_policy is not None
+        and hashlib.sha256(raw).hexdigest() != diagnostic_policy["source"]["dataset_sha256"]
+    ):
+        raise ValueError("Diagnostic source declaration does not match the dataset bytes")
     adapter = ADAPTERS[args.kind]
     dataset = adapter.load(args.dataset) if hasattr(adapter, "load") else json.loads(raw)
     selected = normalize(
@@ -122,6 +130,8 @@ def run(args):
         "evaluation": evaluation_config.contract() if evaluation_config else None,
         "kind": args.kind,
     }
+    if diagnostic_policy is not None:
+        contract["content_diagnostics"] = diagnostic_policy
     if args.resume:
         report = load(args.output)
         report["contract"].setdefault("kind", "locomo")
@@ -186,6 +196,19 @@ def run(args):
     retry_audit = RetryAudit(args.output.with_suffix(".requests.jsonl"))
     private_root = getattr(args, "private_dir", None) or args.output.parent / ".private"
     private_root = private_root / report["run_id"]
+    content = (
+        ContentDiagnostics(
+            private_root / "content-diagnostics",
+            diagnostic_policy,
+            contract,
+            selected,
+            resume=args.resume,
+        )
+        if diagnostic_policy is not None
+        else None
+    )
+    if content is not None and evaluator is not None:
+        evaluator.content_observer = content.model
     report["request_diagnostics"] = retry_audit.summary()
 
     def persist(*, final=False):
@@ -223,6 +246,8 @@ def run(args):
                     report.update(stage="add", current=rid)
                     persist()
                     body = dict(request_id=rid, user_id=user, session_id=session, messages=messages)
+                    if content is not None:
+                        content.add(sample, body)
                     response = call(http, "/add", body, rid)
                     if not isinstance(response, dict) or response.get("success") is not True:
                         raise ValueError("Add response requires explicit success=true")
@@ -232,6 +257,8 @@ def run(args):
                         for k in ("request_id", "user_id", "session_id")
                     ):
                         raise ValueError("Add ID mismatch")
+                    if content is not None:
+                        content.add(sample, body, result.model_dump())
                     report["completed_adds"].append(rid)
                     completed.add(rid)
                     persist()
@@ -247,12 +274,19 @@ def run(args):
                     previous = report["questions"].get(qid)
                     if previous is not None and not previous.get("evaluation_pending"):
                         continue
+                    search_body = dict(user_id=user, query=question["question"], top_k=args.top_k)
+                    if content is not None:
+                        content.question(
+                            qid, sample, question, body=search_body if previous is None else None
+                        )
                     report.update(stage="search", current=qid)
                     persist()
                     cache_path = private_root / (hashlib.sha256(qid.encode()).hexdigest() + ".json")
                     if previous and previous.get("evaluation_pending"):
                         record = previous
                         contents = json.loads(cache_path.read_text())["contents"]
+                        if content is not None:
+                            content.resume_search(contents)
                     elif question.get("is_multi_modality"):
                         record = {"skipped": "multimodal"}
                     else:
@@ -261,11 +295,7 @@ def run(args):
                             call(
                                 http,
                                 "/search",
-                                dict(
-                                    user_id=user,
-                                    query=question["question"],
-                                    top_k=args.top_k,
-                                ),
+                                search_body,
                                 qid,
                             )
                         )
@@ -289,6 +319,13 @@ def run(args):
                                 set(question.get("evidence", [])) - source_ids
                             ),
                         }
+                        if content is not None:
+                            content.question(
+                                qid,
+                                sample,
+                                question,
+                                result=[r.model_dump(exclude_none=True) for r in result.data],
+                            )
                         evidence_dir = args.output.parent / (args.output.stem + ".evidence")
                         evidence_dir.mkdir(exist_ok=True)
                         evidence_path = evidence_dir / (
@@ -316,6 +353,8 @@ def run(args):
                             persist()
                         report.update(stage="answer-eval", current=qid)
                         persist()
+                        if content is not None:
+                            content.question(qid, sample, question, metrics=record)
                         try:
                             evaluation = evaluator.evaluate(question, contents, cache_path)
                         except ModelError as exc:
@@ -340,6 +379,8 @@ def run(args):
                         record["evaluation"] = evaluation
                         record["model_diagnostics"] = list(evaluator.model_attempts)
                         if record.get("evaluation_error", {}).get("fatal"):
+                            if content is not None:
+                                content.question(qid, sample, question, metrics=record)
                             report["questions"][qid] = record
                             save_question(args.output, qid, record)
                             persist()
@@ -351,6 +392,8 @@ def run(args):
                                 fatal=True,
                             )
                     report["questions"][qid] = record
+                    if content is not None:
+                        content.question(qid, sample, question, metrics=record)
                     save_question(args.output, qid, record)
                     persist()
                 print(f"Finished {sample}", flush=True)
@@ -375,7 +418,12 @@ def run(args):
         if report["status"] in {"completed", "partial", "failed", "interrupted"}:
             apply_policy(report, datetime.now(UTC))
         report["summary"] = summarize(report)
-        persist(final=True)
+        try:
+            if content is not None:
+                content.render(report["status"], report["summary"], report["error"])
+        finally:
+            # A separate private output disk failing must not discard benchmark results.
+            persist(final=True)
     print(json.dumps({k: report[k] for k in ("status", "error", "summary")}, indent=2))
     return 0 if report["status"] == "completed" else 1
 
@@ -406,6 +454,16 @@ def main(default_kind="locomo", default_output=None):
         "--private-dir", type=Path, help="Private resumable answer cache; do not upload"
     )
     parser.add_argument("--runtime-label", help="Record the backend revision for this attempt")
+    parser.add_argument(
+        "--content-diagnostics",
+        action="store_true",
+        help="Opt in to private local content reports for independent data only",
+    )
+    parser.add_argument(
+        "--diagnostic-source", type=Path, help="Reviewed source/license/retention declaration JSON"
+    )
+    parser.add_argument("--diagnostic-max-mib", type=int, default=64)
+    parser.add_argument("--diagnostic-max-questions", type=int, default=100)
     args = parser.parse_args()
     args.dataset = args.dataset or Path(DATASETS[args.kind]["path"])
     if args.conversations < 1 or not 1 <= args.top_k <= 100:
