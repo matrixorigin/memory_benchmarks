@@ -76,6 +76,8 @@ spec:
               value: {{ .Values.namespacePrefix | quote }}
             - name: MEMORIA_TIMEOUT_SECONDS
               value: {{ .Values.timeoutSeconds | quote }}
+            - name: MEMORIA_CATALOG_RETRY_TIMEOUT_SECONDS
+              value: {{ .Values.catalogRetryTimeoutSeconds | quote }}
           volumeMounts:
             - name: state
               mountPath: /app/var

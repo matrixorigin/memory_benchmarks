@@ -1,6 +1,8 @@
 """HTTP boundary: use an owner-scoped master credential, never caller headers."""
 
+import logging
 import math
+import re
 import time
 from typing import Annotated, Any
 from urllib.parse import quote
@@ -8,14 +10,23 @@ from urllib.parse import quote
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from .budget import CATALOG_RETRY_WINDOW, CatalogRetryWindow
 from .budget import remaining as budget_remaining
 from .config import Settings
-from .errors import AdapterError, VisibilityPending
+from .errors import AdapterError, CatalogVisibilityPending, VisibilityPending
 from .models import Nonblank
 from .scheduling import BackendScheduler
 
 IDEMPOTENT_PATH = "/v1/memories/idempotent"
 ADAPTER_BRANCH = "main"
+_TABLE_IDENTIFIER = r'''["'`]*(?:[\w-]+["'`]*\.)?["'`]*mem_[a-z0-9_]+["'`]*'''
+_MISSING_TABLE = re.compile(
+    rf"\b1064\s*\(42000\):\s*SQL parser error:\s*table\s+{_TABLE_IDENTIFIER}"
+    rf"\s+does not exist\b|\b1146\s*\(42S02\):\s*no such table\s+"
+    rf"{_TABLE_IDENTIFIER}(?=\s|[,;:)]|$)",
+    re.IGNORECASE,
+)
+logger = logging.getLogger(__name__)
 
 
 class Memory(BaseModel):
@@ -59,13 +70,87 @@ class Memoria:
         *,
         deadline: float | None = None,
     ) -> Any:
+        # Replay only reads and the atomic write route, preserving the exact
+        # payload/key. A failed response does not prove a write was uncommitted.
+        safe_replay = method == "GET" or (
+            method == "POST"
+            and (
+                path in {"/v1/memories/query", "/v1/memories/search"}
+                or (path == IDEMPOTENT_PATH and body and body.get("idempotency_key"))
+            )
+        )
+        window = CATALOG_RETRY_WINDOW.get()
+        if window is None:
+            window = CatalogRetryWindow(self.settings.catalog_retry_timeout_seconds)
+        retry_deadline = None
+        attempt = 0
+        while True:
+            try:
+                result = self._request_once(
+                    method, path, owner, body, deadline=deadline, retry_deadline=retry_deadline
+                )
+                if retry_deadline is not None and time.monotonic() >= retry_deadline:
+                    budget_remaining(float("inf"))
+                    if deadline is not None:
+                        self._remaining_visibility(deadline)
+                    raise CatalogVisibilityPending(502, "Memoria catalog retry window expired")
+                return result
+            except CatalogVisibilityPending:
+                if not safe_replay:
+                    raise
+                retry_deadline = window.start()
+                available = budget_remaining(retry_deadline - time.monotonic())
+                if deadline is not None:
+                    available = min(available, self._remaining_visibility(deadline))
+                if available <= 0:
+                    raise
+                delay = min(0.5 if attempt == 0 else 1.0, available)
+                # No upstream body, URL, owner, credentials or payload in logs.
+                logger.warning(
+                    "Memoria catalog visibility retry wait: attempt=%d delay_ms=%.0f",
+                    attempt + 1,
+                    delay * 1000,
+                )
+                # _request_once released the backend slot before this wait.
+                time.sleep(delay)
+                attempt += 1
+                budget_remaining(float("inf"))
+                if deadline is not None:
+                    self._remaining_visibility(deadline)
+                if time.monotonic() >= retry_deadline:
+                    raise
+            except AdapterError as exc:
+                # Earlier attempts were ambiguous even if this retry never sent.
+                if retry_deadline is not None:
+                    exc.write_not_sent = False
+                raise
+
+    def _request_once(
+        self,
+        method: str,
+        path: str,
+        owner: str,
+        body: dict | None = None,
+        *,
+        deadline: float | None = None,
+        retry_deadline: float | None = None,
+    ) -> Any:
         budget_remaining(float("inf"))
         if deadline is not None:
             self._remaining_visibility(deadline)
         visibility_limited = False
         try:
-            with self.scheduler.slot(deadline=deadline):
+            admission_deadline = min(
+                deadline if deadline is not None else math.inf,
+                retry_deadline if retry_deadline is not None else math.inf,
+            )
+            with self.scheduler.slot(deadline=admission_deadline):
                 timeout = budget_remaining(self.settings.timeout_seconds)
+                if retry_deadline is not None:
+                    retry_remaining = retry_deadline - time.monotonic()
+                    if retry_remaining <= 0:
+                        raise CatalogVisibilityPending(502, "Memoria catalog retry window expired")
+                    timeout = min(timeout, retry_remaining)
                 if deadline is not None:
                     remaining = self._remaining_visibility(deadline)
                     visibility_limited = remaining <= timeout
@@ -126,7 +211,12 @@ class Memoria:
             # conflicts and server errors remain ambiguous and require recovery.
             rejected = code in {400, 401, 403, 404, 405, 413, 415, 422, 425, 429}
             retry_after = response.headers.get("Retry-After", "")
-            raise AdapterError(
+            error_class = (
+                CatalogVisibilityPending
+                if code == 500 and _MISSING_TABLE.search(response.text[:16384])
+                else AdapterError
+            )
+            raise error_class(
                 status,
                 reason,
                 write_not_sent=rejected,

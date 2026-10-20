@@ -34,6 +34,7 @@ certificate:
   issuer: aliyun-prod-letsencrypt
 namespacePrefix: aml-dev-v1
 timeoutSeconds: 120
+catalogRetryTimeoutSeconds: 5
 workers: 1
 resources:
   requests:

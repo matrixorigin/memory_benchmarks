@@ -2,8 +2,8 @@ import hashlib
 import json
 from itertools import chain, pairwise
 
+from .budget import catalog_retry_budget, request_budget
 from .budget import remaining as budget_remaining
-from .budget import request_budget
 from .config import Settings
 from .errors import AdapterError
 from .ingestion import message_parts
@@ -30,7 +30,11 @@ class MemoryAdapter:
         return digest([self.settings.namespace, user_id])
 
     def add(self, request: AddRequest) -> AddResponse:
-        with request_budget(self.settings.request_timeout_seconds), self.journal.metrics.add():
+        with (
+            request_budget(self.settings.request_timeout_seconds),
+            catalog_retry_budget(self.settings.catalog_retry_timeout_seconds),
+            self.journal.metrics.add(),
+        ):
             owner = self.owner(request.user_id)
             key = digest([self.settings.memoria_url.rstrip("/"), owner, request.request_id])
             fingerprint = digest(request.model_dump())
@@ -125,7 +129,10 @@ class MemoryAdapter:
         )
 
     def search(self, request: SearchRequest) -> SearchResponse:
-        with request_budget(self.settings.request_timeout_seconds):
+        with (
+            request_budget(self.settings.request_timeout_seconds),
+            catalog_retry_budget(self.settings.catalog_retry_timeout_seconds),
+        ):
             result = self._search(request)
             budget_remaining(float("inf"))
             return result

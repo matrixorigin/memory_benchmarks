@@ -7,10 +7,38 @@ an asynchronous hard kill and does not claim a strict HTTP wall-clock deadline.
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 
 from .errors import AdapterError
 
 DEADLINE: ContextVar[float | None] = ContextVar("adapter_request_deadline", default=None)
+
+
+@dataclass
+class CatalogRetryWindow:
+    seconds: float
+    deadline: float | None = None
+
+    def start(self) -> float:
+        if self.deadline is None:
+            self.deadline = time.monotonic() + self.seconds
+        return self.deadline
+
+
+CATALOG_RETRY_WINDOW: ContextVar[CatalogRetryWindow | None] = ContextVar(
+    "adapter_catalog_retry_window", default=None
+)
+
+
+@contextmanager
+def catalog_retry_budget(seconds: float):
+    """One lazy window shared by all backend calls/chunks in this request."""
+    parent = CATALOG_RETRY_WINDOW.get()
+    token = CATALOG_RETRY_WINDOW.set(parent if parent is not None else CatalogRetryWindow(seconds))
+    try:
+        yield
+    finally:
+        CATALOG_RETRY_WINDOW.reset(token)
 
 
 class RequestBudgetExceeded(AdapterError):

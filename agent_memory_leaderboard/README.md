@@ -164,9 +164,32 @@ the `idempotent_v1` protocol in SQLite **before** sending HTTP. On a later Add
 retry, an attempt without an acknowledged memory ID can safely resend the same
 key and body: the backend returns the existing receipt or creates the record
 once. This recovers both pre-commit server failures and a crash after journaling
-but before sending. The adapter still makes one write attempt per incoming Add
-attempt; it does not add an internal retry loop. Once the memory ID is known,
+but before sending. Ordinary errors still end the current Add attempt; only the
+specific catalog-visibility errors described below are retried internally.
+Once the memory ID is known,
 retries use point reads and retrieval probes instead of reposting.
+
+When Memoria returns HTTP 500 with a recognized MatrixOne missing `mem_*` table
+error (1064/42000 with the missing-table parser message, or 1146/42S02 with
+`no such table`), the adapter uses a bounded recovery window configured by
+`MEMORIA_CATALOG_RETRY_TIMEOUT_SECONDS` (default 5 seconds, finite in `[0, 120]`;
+0 disables retries). Helm exposes the same value as `catalogRetryTimeoutSeconds`.
+The window starts on the first recognized error and is shared by every backend
+call and chunk in one Add/Search request; it never resets per retry or chunk.
+Backoff starts at 0.5 seconds and is capped at 1 second and the remaining window.
+Retry admission waits and HTTP I/O limits are capped by that same deadline.
+As with the request budget, synchronous I/O may unwind after expiry; a late
+success is rejected, and the window is not a hard cancellation timer.
+This covers atomic keyed writes, point reads,
+recovery queries and Search; a write retry preserves its exact payload and
+idempotency key. Backoff releases the backend slot and consumes the existing
+request budget and, during verification, the original visibility budget. Other
+server errors, SQL syntax errors, authorization/validation failures and
+non-atomic writes do not enter this retry loop. Exhaustion keeps the existing
+error mapping and ambiguous-write journal state; it never claims the write was
+not committed. Retry warnings contain only attempt numbers and delay durations.
+This is bounded recovery for transient visibility, not a guarantee that a
+permanently missing schema will recover or a replacement for backend consistency.
 
 Atomic writes, all point reads/recovery queries/visibility probes, and public
 Search explicitly use branch `main`, keeping the receipt scope independent of
