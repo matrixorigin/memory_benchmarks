@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "source_type": "synthetic",
+  "source_uri": "synthetic:offline-tool-demo",
+  "source_version": "1",
+  "license": "LicenseRef-SelfAuthored-LocalEvaluation",
+  "dataset_sha256": "c51ba347c2ffd657d3583a4257a589abd6dcc992528eee4e1b3ec51386ba91cd",
+  "permitted_uses": [
+    "local_evaluation",
+    "local_content_diagnostics"
+  ],
+  "retention_days": 7,
+  "independently_obtained": true,
+  "no_official_material": true,
+  "no_sensitive_content": true
+}

@@ -602,3 +602,10 @@ image containing these settings. Unknown environment variables are silently
 ignored by older adapter images. These budgets are candidates to validate with
 64-client mixed and multi-message loads; no deployment or throughput guarantee
 is implied by changing them.
+
+### Opt-in self-evaluation content reports
+
+The self-run benchmark client can generate bounded, private local per-question
+Add/Search/Answer/Eval reports for independently sourced synthetic or permitted
+public data. This is disabled by default and adds no official-request body logs.
+See [the offline demonstration, source declaration and limits](benchmarks/EVALUATION.md#opt-in-local-content-diagnostics).

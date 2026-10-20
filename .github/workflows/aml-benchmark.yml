@@ -94,6 +94,14 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: aml-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
-          path: agent_memory_leaderboard/var/ci-benchmark/results/
+          # Explicit metadata-only allowlist. Private content/cache files are never artifacts.
+          path: |
+            agent_memory_leaderboard/var/ci-benchmark/results/run.json
+            agent_memory_leaderboard/var/ci-benchmark/results/run.requests.jsonl
+            agent_memory_leaderboard/var/ci-benchmark/results/run.questions/*.json
+            agent_memory_leaderboard/var/ci-benchmark/results/run.evidence/*.json
+            agent_memory_leaderboard/var/ci-benchmark/results/run.sources/*.json
+            agent_memory_leaderboard/var/ci-benchmark/results/selection.json
+            agent_memory_leaderboard/var/ci-benchmark/results/summary.md
           if-no-files-found: warn
           retention-days: 30
