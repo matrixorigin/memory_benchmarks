@@ -16,6 +16,7 @@ class Settings:
     connect_timeout_seconds: float = field(default=30, kw_only=True)
     request_timeout_seconds: float = field(default=1700, kw_only=True)
     visibility_timeout_seconds: float = field(default=60, kw_only=True)
+    catalog_retry_timeout_seconds: float = field(default=5, kw_only=True)
     backend_max_concurrency: int = 0
     backend_requests_per_second: float = 0
     backend_queue_timeout_seconds: float = 120
@@ -59,6 +60,11 @@ class Settings:
         if not math.isfinite(self.journal_slow_ms) or self.journal_slow_ms < 0:
             raise ValueError("ADAPTER_JOURNAL_SLOW_MS must be nonnegative and finite")
         if (
+            not math.isfinite(self.catalog_retry_timeout_seconds)
+            or not 0 <= self.catalog_retry_timeout_seconds <= 120
+        ):
+            raise ValueError("MEMORIA_CATALOG_RETRY_TIMEOUT_SECONDS must be in [0, 120]")
+        if (
             not math.isfinite(self.visibility_timeout_seconds)
             or not 0 < self.visibility_timeout_seconds <= 120
         ):
@@ -89,6 +95,9 @@ class Settings:
             connect_timeout_seconds=float(os.getenv("MEMORIA_CONNECT_TIMEOUT_SECONDS", "30")),
             request_timeout_seconds=float(os.getenv("ADAPTER_REQUEST_TIMEOUT_SECONDS", "1700")),
             visibility_timeout_seconds=float(os.getenv("MEMORIA_VISIBILITY_TIMEOUT_SECONDS", "60")),
+            catalog_retry_timeout_seconds=float(
+                os.getenv("MEMORIA_CATALOG_RETRY_TIMEOUT_SECONDS", "5")
+            ),
             backend_max_concurrency=int(os.getenv("MEMORIA_MAX_CONCURRENCY", "0")),
             backend_requests_per_second=float(os.getenv("MEMORIA_REQUESTS_PER_SECOND", "0")),
             backend_queue_timeout_seconds=float(os.getenv("MEMORIA_QUEUE_TIMEOUT_SECONDS", "120")),

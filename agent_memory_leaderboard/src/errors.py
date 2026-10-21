@@ -17,3 +17,7 @@ class AdapterError(Exception):
 
 class VisibilityPending(AdapterError):
     """A valid empty read/retrieval result; other 503s must not enter this retry loop."""
+
+
+class CatalogVisibilityPending(AdapterError):
+    """Recognized upstream missing-table error; a write may already have committed."""
