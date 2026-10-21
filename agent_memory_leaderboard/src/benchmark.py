@@ -127,7 +127,7 @@ def run(args):
         "runner_version": 2,
         "ingestion_version": "label-free-exact-hash-v1",
         "mode": mode,
-        "evaluation": evaluation_config.contract() if evaluation_config else None,
+        "evaluation": evaluator.config.contract() if evaluator else None,
         "kind": args.kind,
     }
     if diagnostic_policy is not None:
@@ -356,7 +356,14 @@ def run(args):
                         if content is not None:
                             content.question(qid, sample, question, metrics=record)
                         try:
-                            evaluation = evaluator.evaluate(question, contents, cache_path)
+                            evaluation = evaluator.evaluate(
+                                question,
+                                contents,
+                                cache_path,
+                                reader_records=manifest.reader_records(contents)
+                                if args.kind == "longmemeval"
+                                else None,
+                            )
                         except ModelError as exc:
                             evaluation = exc.partial_result
                             record.update(
@@ -374,7 +381,12 @@ def run(args):
                         if "context_records" in evaluation:
                             evaluation["budget_evidence_recall"] = recall(
                                 question.get("evidence", []),
-                                ranked_ids[: evaluation["context_records"]],
+                                [
+                                    ranked_ids[index]
+                                    for index in evaluation["context_record_indices"]
+                                ]
+                                if "context_record_indices" in evaluation
+                                else ranked_ids[: evaluation["context_records"]],
                             )
                         record["evaluation"] = evaluation
                         record["model_diagnostics"] = list(evaluator.model_attempts)

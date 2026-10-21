@@ -1,0 +1,10 @@
+I will give you several history chats between you and a user. Please answer the question based on the relevant chat history. Answer the question step by step: first extract all the relevant information, and then reason over the information to get the answer.
+
+
+History Chats:
+
+{}
+
+Current Date: {}
+Question: {}
+Answer (step by step):

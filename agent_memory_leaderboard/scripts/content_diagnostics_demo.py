@@ -90,7 +90,7 @@ def run(output_dir, scenario):
             result = (
                 "invalid synthetic verdict"
                 if scenario == "judge-failure"
-                else json.dumps({"correct": scenario == "complete"})
+                else json.dumps({"label": "CORRECT" if scenario == "complete" else "WRONG"})
             )
         return httpx.Response(
             200, json={"choices": [{"message": {"content": result}, "finish_reason": "stop"}]}
