@@ -429,8 +429,12 @@ class ContentDiagnostics:
         if phase.endswith("_input"):
             record["model"].pop(phase.replace("_input", "_output"), None)
         if phase == "answer_input":
-            for stale in ("judge_input", "judge_output"):
+            for stale in ("judge_input", "judge_output", "judge_candidates"):
                 record["model"].pop(stale, None)
+        if phase == "judge_input":
+            record["model"].setdefault("judge_candidates", []).append({"input": value})
+        elif phase == "judge_output" and record["model"].get("judge_candidates"):
+            record["model"]["judge_candidates"][-1]["output"] = value
         self.put(self.current, record, "question", record["sample"])
 
     def resume_search(self, contents):

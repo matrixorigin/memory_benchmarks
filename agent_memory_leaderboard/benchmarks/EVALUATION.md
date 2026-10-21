@@ -7,21 +7,39 @@ OpenAI-compatible answer call and a separate dataset-aware judge call for
 LoCoMo-Refined and LongMemEval-S. Both modes are local diagnostics: neither
 consumes AML Full quota nor produces an official AML score.
 
-The local judge uses versioned, independently maintained rubrics inspired by
+The self-run judge uses the complete, pinned upstream prompts from
 [LoCoMo-Refined](https://github.com/mem-eval-suite/LoCoMo_refined/tree/887091190789e8d6760e70b9edd696539923dc4f)
 and [LongMemEval](https://github.com/xiaowu0162/LongMemEval/tree/9e0b455f4ef0e2ab8f2e582289761153549043fc).
-It does **not** reproduce those repositories' native evaluator prompts, output
-handling or model runtimes. Reports set `native_evaluator_equivalent=false`.
-Use a fixed answer model, judge model and dataset for comparisons; choosing
-Qwen3-14B alone does not make this local judge equivalent to the refined judge.
-Native evaluation and official AML validation remain separate acceptance work.
+LoCoMo uses the unmodified `refined` template, one request for each acceptable
+gold candidate, and the maximum candidate score. LongMemEval uses its original
+category-specific `get_anscheck_prompt`, including abstention. Sources, revisions,
+prompt hashes, request options, aggregation and the scorer version are recorded
+in the evaluation contract. The HTTP client retains bounded retries/timeouts
+rather than copying upstream's runtime: LoCoMo upstream retries evaluation errors
+up to ten times, while this client retries transient transport/status failures
+up to four times and leaves malformed JSON pending for explicit resume. Compare
+coverage separately when failures occur. Vendored material and its attribution/license notices
+are under `src/judges/`.
+
+Use Qwen3-14B for the LoCoMo-Refined judge. LongMemEval's pinned evaluator supports
+`gpt-4o-2024-08-06`, `gpt-4o-mini-2024-07-18`, and
+`meta-llama/Meta-Llama-3.1-70B-Instruct`; select and record the intended model.
+A different configured model produces a warning and
+`judge_model_matches_upstream=false` in each evaluation. Model aliases do not
+verify the weights deployed by a provider.
+
+Official prompts alone do **not** reproduce the complete native benchmark:
+retrieval/chunking, answer generation, context selection, lexical metrics and
+provider runtime remain this client's implementation. Reports therefore retain
+`native_evaluator_equivalent=false`. Use a fixed answer model, judge model and
+dataset for comparisons. Official AML validation is separate acceptance work.
 
 "Local" means a self-run evaluation, including GitHub Actions; it does not
 require a locally deployed Memoria service. The workflow and CLI share this
 evaluator. AML's public documentation describes a platform-controlled Answer/Eval
 flow, but the complete official judge prompts and a reproducible implementation
 were not found in the documentation checked on 2026-10-07. The prompts in
-`src/evaluation.py` are maintained by this project, not copied from AML.
+`src/judges/` come from the public benchmark repositories, not from AML.
 See the [official documentation](https://agentmemories.ai/zh-cn/docs) and
 [competition readiness plan](../docs/competition-plan.md#正式参评前的工作).
 
@@ -92,7 +110,9 @@ are explicitly not proof that a request was sent. Successful request/response
 snapshots come from the execution path, not later database reconstruction.
 
 No invented judge explanation or hidden model reasoning is requested. When the
-judge provides only `correct`, the page states that no explanation was supplied.
+judge provides only a label, the page states that no explanation was supplied.
+For multiple gold candidates, all candidate inputs and outputs are retained;
+the per-question score is their maximum, rather than the final displayed label.
 Source mapping ambiguity, missing annotated sources, budget exclusion and model
 failure are diagnostic signals, not automatic root-cause findings.
 
@@ -232,8 +252,8 @@ reported as an evaluation skip without calling answer/judge models, not scored a
   higher is better. Case-insensitive word/punctuation tokenization.
 - **BLEU-1**: clipped unigram precision with a brevity penalty for LoCoMo; 0–1,
   higher is better. A short answer missing reference information is penalized.
-- **Local judge accuracy**: mean binary correctness under the local dataset
-  rubric; 0–1, higher is better. LME abstention, knowledge update, preference and
+- **Local judge accuracy**: mean binary correctness under the pinned upstream
+  prompt and configured model; 0–1, higher is better. LME abstention, knowledge update, preference and
   temporal questions have distinct rules. It is not a native/public leaderboard score.
 - **Within-budget evidence recall**: source recall using only the ranked prefix
   actually passed to the answer model; 0–1, higher is better.
@@ -249,7 +269,12 @@ adapter. A Qwen model may tokenize differently. Report provider prompt usage
 when available; a reported over-budget request fails evaluation. That check is
 after the provider call and does not guarantee avoidance of billing or over-limit
 requests. Confirm the actual model tokenizer/template before formal comparisons.
-Output length has a separate limit (default 1024); temperature is zero.
+Answer output length has a separate limit (default 1024); temperature is zero.
+Judge settings follow upstream: LoCoMo has no explicit output-token override and
+requests `enable_thinking=false`; LongMemEval uses `n=1` and `max_tokens=10`.
+If a provider explicitly rejects `enable_thinking` as unsupported, it is removed
+and the fallback is recorded as `thinking_option_unsupported`. Other 400/422
+responses do not trigger this fallback.
 
 Prefix selection uses binary search with memoized full-request token counts,
 reducing encoding passes from O(N) to O(log N) for N retrieved records. Each
@@ -258,16 +283,22 @@ complete input; this avoids assuming that BPE counts are additive per record.
 
 ### Model failures and scoring coverage
 
-Answer and judge calls each allow at most four HTTP attempts. Transport errors,
+Answer and judge calls each allow at most four transient HTTP attempts. LoCoMo's
+explicit unsupported-thinking-option fallback can add one HTTP request. Transport errors,
 429 and 5xx use exponential backoff (0.5, 1, 2 seconds); numeric `Retry-After`
 on 429 is capped at 30 seconds per delay. Other HTTP errors are not retried.
 Safe per-question attempt diagnostics include phase, attempt, HTTP status or
 transport marker, duration and retry flag, without provider bodies or credentials.
 
-The judge accepts a strict JSON object containing only boolean `correct`, either
-bare or inside a complete Markdown code fence. Invalid JSON, invalid response
-envelopes, blank output, nonterminal completion reasons including `length`,
-exhausted transient failures and budget overflow fail the affected question.
+LoCoMo parses upstream's JSON `label: CORRECT/WRONG` format, including fenced
+objects. LongMemEval parses `yes/no`. The previous custom `correct: true/false`
+format and abbreviated rubrics are no longer used. Label decisions also follow
+upstream: LoCoMo treats a parsed object whose label is not `CORRECT` as zero;
+LongMemEval checks whether `yes` appears in the response. These are upstream
+behaviors, not newly tightened validation rules. Invalid JSON and malformed
+response envelopes fail evaluation. Answer output must be nonblank and finish
+normally; Judge text is parsed regardless of finish reason, matching upstream.
+Exhausted transient failures and budget overflow also fail the affected question.
 It remains `evaluation_pending` with `answer_failed` or `judge_failed`; later
 questions continue. Authentication/endpoint errors (401/403/404/405) stop the run
 early because they normally affect every question. Storage and programming
@@ -288,7 +319,10 @@ retrying its judge. This avoids repeated Add/Search and answer calls. Interrupte
 calls whose result was not saved may still repeat. Retry, parser and context
 selection versions are recorded in the evaluation contract; pre-hardening
 Answer/Eval checkpoints do not match this contract and require a fresh run or
-their original runner. Retrieval-only checkpoint compatibility is unchanged.
+their original runner. Changing this scorer version likewise prevents resuming
+an old Answer/Eval run with mixed scoring rules. Retrieval-only checkpoint
+compatibility is unchanged. Rejudging only previously incorrect predictions is a
+subset audit; do not report a new full-run accuracy by mixing old and new judges.
 
 ### Checkpoints and privacy
 

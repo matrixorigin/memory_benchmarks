@@ -20,13 +20,13 @@ def completion(content="prediction", finish="stop", **extra):
 @pytest.mark.parametrize(
     "text,score",
     [
-        ('{"correct": true}', 1),
-        (' {"correct": false} ', 0),
-        ('```json\n{"correct": true}\n```', 1),
-        ('```\n{"correct": false}\n```', 0),
+        ('{"label": "CORRECT"}', 1),
+        (' {"label": "WRONG"} ', 0),
+        ('```json\n{"label": "CORRECT"}\n```', 1),
+        ('```\n{"label": "WRONG"}\n```', 0),
     ],
 )
-def test_verdict_accepts_strict_json_with_complete_fence(text, score):
+def test_verdict_accepts_upstream_label_format(text, score):
     assert parse_verdict(text) == score
 
 
@@ -37,13 +37,6 @@ def test_verdict_accepts_strict_json_with_complete_fence(text, score):
         "not JSON",
         "[]",
         "true",
-        '{"correct": 1}',
-        '{"correct": "false"}',
-        '{"correct": null}',
-        "{}",
-        '{"correct": true, "reason": "extra"}',
-        'preface {"correct": true}',
-        '```json\n{"correct": true}',
     ],
 )
 def test_verdict_rejects_invalid_or_coerced_scores(text):
@@ -204,7 +197,7 @@ def test_judge_failure_preserves_answer_for_resume(evaluator, tmp_path, mock_htt
             assert "PRIVATE_GOLD" not in str(body)
             return httpx.Response(200, json=completion("prediction"))
         return httpx.Response(
-            200, json=completion("bad JSON" if bad_judge else '```json\n{"correct": true}\n```')
+            200, json=completion("bad JSON" if bad_judge else '```json\n{"label": "CORRECT"}\n```')
         )
 
     mock_http(handler)

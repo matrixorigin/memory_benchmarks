@@ -82,7 +82,7 @@ def artifacts(args):
     return report, root, json.loads((root / "manifest.json").read_text())
 
 
-def handler(calls, *, verdict='{"correct": true}', answer="Go", extra_content=""):
+def handler(calls, *, verdict='{"label": "CORRECT"}', answer="Go", extra_content=""):
     def respond(request):
         body = json.loads(request.content) if request.content else {}
         calls[(request.url.host, request.url.path)] += 1

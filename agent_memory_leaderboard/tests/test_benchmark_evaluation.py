@@ -64,7 +64,12 @@ def test_failed_question_continues_and_resume_only_retries_pending_models(
                     200, json={"data": [{"id": "m1", "content": "[user]\n[date] A: fact"}]}
                 )
             return httpx.Response(200, json={"status": "ok"})
-        question = json.loads(body["messages"][-1]["content"])["question"]
+        text = body["messages"][-1]["content"]
+        question = (
+            json.loads(text)["question"]
+            if host == "answer.test"
+            else text.rsplit("Question: ", 1)[1].split("\nGold answer:", 1)[0]
+        )
         calls[(host, question)] += 1
         if host == "answer.test":
             assert "PRIVATE_GOLD" not in str(body)
@@ -74,9 +79,11 @@ def test_failed_question_continues_and_resume_only_retries_pending_models(
             return httpx.Response(int(failure), text="PRIVATE upstream secret")
         if failing and failure == "transport":
             raise httpx.ReadTimeout("PRIVATE upstream secret", request=request)
-        content = "prediction" if host == "answer.test" else '{"correct": true}'
+        content = "prediction" if host == "answer.test" else '{"label": "CORRECT"}'
         if failing and failure in {"answer", "judge"}:
             content = " " if failure == "answer" else "INVALID PRIVATE VERDICT"
+        if failing and failure == "length":
+            content = '{"label":'
         return httpx.Response(
             200,
             json={
