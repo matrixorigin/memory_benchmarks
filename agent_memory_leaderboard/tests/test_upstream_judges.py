@@ -208,9 +208,16 @@ def test_longmemeval_http_uses_native_options(fake_encoding, model_env, mock_htt
         return response("yes")
 
     mock_http(handler)
-    evaluator = AnswerEvaluator(EvaluationConfig.from_env(), "longmemeval")
+    config = EvaluationConfig.from_env()
+    config.input_budget = 128000
+    evaluator = AnswerEvaluator(config, "longmemeval")
     result = evaluator.evaluate(
-        {"question": "Box color?", "category": "single-session-user", "answer": "Blue"},
+        {
+            "question": "Box color?",
+            "category": "single-session-user",
+            "answer": "Blue",
+            "question_date": "2026/01/01 (Thu) 00:00",
+        },
         ["A blue box."],
         tmp_path / "answer.json",
     )

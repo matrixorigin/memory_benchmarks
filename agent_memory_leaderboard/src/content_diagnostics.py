@@ -30,6 +30,9 @@ MODEL_FIELDS = {
     "context_selection_version",
     "model_retry_version",
     "verdict_parser_version",
+    "longmemeval_reading_method",
+    "longmemeval_reader_profile",
+    "judge_profiles",
 }
 
 
@@ -480,10 +483,19 @@ class ContentDiagnostics:
                     record.get("search_request", "not captured; consult run stage/status"),
                 )
                 included = record.get("model", {}).get("answer_input", {}).get("included_records")
+                answer_input = record.get("model", {}).get("answer_input", {})
+                indices = answer_input.get("context_record_indices")
+                partial = answer_input.get("partial_context_record_indices", [])
                 for rank, item in enumerate(record.get("retrieved", []), 1):
                     selection = (
                         "not evaluated"
                         if included is None
+                        else "partially included by token truncation"
+                        if rank - 1 in partial
+                        else "included"
+                        if indices is not None and rank - 1 in indices
+                        else "excluded by input budget"
+                        if indices is not None
                         else "included"
                         if rank <= included
                         else "excluded by input budget"

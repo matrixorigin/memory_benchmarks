@@ -13,6 +13,9 @@ def fake_encoding(monkeypatch):
             self.calls += 1
             return text.encode("utf-8")
 
+        def decode(self, tokens):
+            return bytes(tokens).decode("utf-8", errors="replace")
+
     encoder = Encoder()
     monkeypatch.setattr(tiktoken, "get_encoding", lambda name: encoder)
     return encoder

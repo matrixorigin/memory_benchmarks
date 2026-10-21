@@ -8,15 +8,17 @@ import re
 import time
 import warnings
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import urlsplit
 
 import httpx
 
 from .checkpoint import save
 from .judging import PROFILES, judge_requests, model_matches_upstream, parse_label
+from .reading import CONTEXT_WINDOWS, READER_PROFILE
+from .reading import context as longmemeval_context
 
-PROMPT_VERSION = "memory-answer-v1"
+PROMPT_VERSION = "dataset-reader-v2"
 SCORER_VERSION = "upstream-dataset-prompts-v2"
 SYSTEM = (
     "Answer the question using only the retrieved conversation evidence. "
@@ -76,8 +78,9 @@ class EvaluationConfig:
     judge_model: str
     judge_base: str
     encoding: str = "o200k_base"
-    input_budget: int = 117760
-    output_tokens: int = 1024
+    input_budget: int | None = None
+    output_tokens: int | None = None
+    longmemeval_reading_method: str = "con"
 
     @classmethod
     def from_env(cls):
@@ -99,11 +102,22 @@ class EvaluationConfig:
             os.environ[required[3]],
             endpoint(os.environ[required[4]]),
             os.getenv("BENCHMARK_TOKEN_ENCODING", "o200k_base"),
-            int(os.getenv("BENCHMARK_INPUT_BUDGET", "117760")),
-            int(os.getenv("BENCHMARK_OUTPUT_TOKENS", "1024")),
+            int(os.environ["BENCHMARK_INPUT_BUDGET"])
+            if os.getenv("BENCHMARK_INPUT_BUDGET", "").strip()
+            else None,
+            int(os.environ["BENCHMARK_OUTPUT_TOKENS"])
+            if os.getenv("BENCHMARK_OUTPUT_TOKENS", "").strip()
+            else None,
+            os.getenv("BENCHMARK_LONGMEMEVAL_READING_METHOD", "con"),
         )
-        if not 256 <= config.input_budget <= 117760 or not 1 <= config.output_tokens <= 8192:
-            raise ValueError("Input budget must be 256–117760; output tokens must be 1–8192")
+        if (
+            config.input_budget is not None
+            and not 256 <= config.input_budget <= 128000
+            or config.output_tokens is not None
+            and not 1 <= config.output_tokens <= 8192
+            or config.longmemeval_reading_method not in {"con", "direct"}
+        ):
+            raise ValueError("Invalid evaluation budget or reading method (con/direct)")
         return config
 
     def contract(self):
@@ -112,7 +126,8 @@ class EvaluationConfig:
             "scorer_version": SCORER_VERSION,
             "temperature": 0,
             "token_accounting": "serialized-messages-plus-256-v1",
-            "context_selection_version": "ranked-prefix-binary-v2",
+            "context_selection_version": "dataset-context-v3",
+            "longmemeval_reader_profile": READER_PROFILE,
             "model_retry_version": "four-transient-attempts-capability-fallback-v2",
             "verdict_parser_version": "pinned-upstream-label-decisions-v3",
             "judge_profiles": PROFILES,
@@ -127,7 +142,28 @@ class AnswerEvaluator:
         import tiktoken
 
         self.encoder = tiktoken.get_encoding(config.encoding)
-        self.config, self.kind = config, kind
+        default_input = 117760
+        if kind == "longmemeval":
+            default_input = CONTEXT_WINDOWS.get(config.answer_model)
+            if default_input is None and config.input_budget is None:
+                raise ValueError(
+                    "LongMemEval requires BENCHMARK_INPUT_BUDGET for an unknown answer model"
+                )
+            if (
+                default_input is not None
+                and config.input_budget is not None
+                and config.input_budget > default_input
+            ):
+                raise ValueError("Input budget exceeds the pinned answer model context window")
+        output_default = 800 if config.longmemeval_reading_method == "con" else 500
+        self.config = replace(
+            config,
+            input_budget=config.input_budget if config.input_budget is not None else default_input,
+            output_tokens=config.output_tokens
+            if config.output_tokens is not None
+            else (output_default if kind == "longmemeval" else 1024),
+        )
+        self.kind = kind
         self.model_attempts = []
         self.content_observer = None
         if not model_matches_upstream(kind, config.judge_model):
@@ -307,12 +343,30 @@ class AnswerEvaluator:
         }
         return content.strip(), usage
 
-    def evaluate(self, question, contents, cache_path):
+    def evaluate(self, question, contents, cache_path, *, reader_records=None):
         self.model_attempts = []
         answer = question.get("answer")
         if answer is None or answer == []:
             return {"skipped": "missing_gold_answer", "native_evaluator_equivalent": False}
-        messages, included, tokens = self.context(question, contents)
+        reader_info = {}
+        if self.kind == "longmemeval":
+            try:
+                messages, reader_info = longmemeval_context(
+                    question,
+                    contents,
+                    reader_records,
+                    self.encoder,
+                    self.config.input_budget,
+                    self.config.output_tokens,
+                    self.config.longmemeval_reading_method,
+                    self.count,
+                )
+            except ValueError as exc:
+                raise ModelError("answer", "longmemeval_context_invalid") from exc
+            included = reader_info["context_records"]
+            tokens = reader_info["input_tokens_estimate"]
+        else:
+            messages, included, tokens = self.context(question, contents)
         result = {
             "judge_profile": PROFILES[self.kind],
             "judge_model_matches_upstream": model_matches_upstream(
@@ -321,6 +375,7 @@ class AnswerEvaluator:
             "context_records": included,
             "input_tokens_estimate": tokens,
             "native_evaluator_equivalent": False,
+            **reader_info,
         }
         signature = hashlib.sha256(
             json.dumps(
@@ -338,11 +393,17 @@ class AnswerEvaluator:
                 "input_tokens_estimate": tokens,
                 "max_output_tokens": self.config.output_tokens,
                 "from_signature_verified_cache": reused,
+                **reader_info,
             },
         )
         if not reused:
             try:
-                prediction, usage = self.chat("ANSWER", messages, self.config.output_tokens)
+                prediction, usage = self.chat(
+                    "ANSWER",
+                    messages,
+                    self.config.output_tokens,
+                    request_options={"n": 1} if self.kind == "longmemeval" else None,
+                )
             except ModelError as exc:
                 exc.partial_result = result
                 raise

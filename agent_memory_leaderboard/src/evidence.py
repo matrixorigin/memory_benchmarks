@@ -36,12 +36,31 @@ class SourceManifest:
     def __init__(self, conversation):
         self.hashes = {}
         self.entries = []
+        self.reader_rows = {}
         for session, index, source, body in source_messages(conversation):
             parts = [content for content, _ in message_parts(Message.model_validate(body))]
             # Include exact wire content for adapters returning the original message.
             hashes = sorted({content_hash(body["content"]), *(content_hash(p) for p in parts)})
             for value in hashes:
                 self.hashes.setdefault(value, set()).add(source)
+            date = conversation[session + "_date_time"]
+            turn = conversation[session][index]
+            prefix = f"[{date}] {turn['speaker']}: "
+            variants = [(body["content"], body["content"], 0)]
+            header = f"[{body['role']}]\n"
+            variants.extend((part, part.removeprefix(header), i) for i, part in enumerate(parts))
+            for wire, actual_part, part_index in variants:
+                row = {
+                    "session": session,
+                    "date": date,
+                    "role": body["role"],
+                    "content": actual_part.removeprefix(prefix) if part_index == 0 else actual_part,
+                    "message_index": index,
+                    "part_index": part_index,
+                }
+                rows = self.reader_rows.setdefault(content_hash(wire), [])
+                if row not in rows:
+                    rows.append(row)
             self.entries.append(
                 {
                     "session": session,
@@ -73,6 +92,14 @@ class SourceManifest:
             ),
             "unmapped_records": sum(content_hash(c) not in self.hashes for c in contents),
         }
+
+    def reader_records(self, contents):
+        """Label-free metadata for exact returned fragments; never expand to full turns."""
+        result = []
+        for content in contents:
+            rows = self.reader_rows.get(content_hash(content), [])
+            result.append(rows[0].copy() if len(rows) == 1 else None)
+        return result
 
 
 def recall(expected, ranked_ids):
