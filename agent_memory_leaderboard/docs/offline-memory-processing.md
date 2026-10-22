@@ -95,6 +95,18 @@ uv run python -m src.processing publish \
 由操作者按 publication 中的精确范围另行清理。
 输入 source_id 与 Memoria memory_id 是不同身份；通过 publication 中原文条目的
 source_ids 和 memory_id 关联，不能将输入 ID 直接当作后端记录 ID。
+存在相同发布清单时，会复用已确认条目，仅继续未完成的写入／确认。
+
+已有原文检索上下文时，可给 publish 增加 `--derived-only`，只发布派生记录。
+随后 search 使用 `--baseline-file baseline.json`；文件采用标准 SearchResponse
+结构（`{"data":[{"id":"...","content":"..."}]}`），不包含问题或答案。
+此模式复用同一批原文候选，输出记录基线 hash，不查询实验原文 owner。
+只发布派生记录而未提供 baseline-file 时，search 会拒绝执行。
+
+若部分加工窗口失败，默认仍回退全部原文。实验可显式传
+`--allow-partial-extraction` 使用已经校验且发布确认的派生子集；输出标记
+`partial_extraction`，报告必须单列加工覆盖率，不能声称已完成全量加工。
+该选项不绕过发布确认。窗口失败不会让剩余窗口停止执行。
 
 3. 检索对照。把同一个查询写入本地 `query.txt`，分别使用两个输出文件：
 
@@ -137,3 +149,6 @@ embedding，因此要实测时延，不能宣称无额外成本。
   只展示获益错题不足以证明有效；没有更简单方案对照时，不宣称其优于排序或邻接补全。
 - observe 对照按接入成本决定，不是前置条件。常驻 Worker、在线接入、生命周期联动
   和图能力不在本轮实现范围。启用实验开关不等于启用正式评测的二次加工。
+
+容器内需要执行实验命令时，构建时传 `--build-arg INSTALL_EXPERIMENT_DEPS=true`。
+依赖锁定在 requirements-experiment.lock；默认镜像仍只安装 adapter 运行依赖。

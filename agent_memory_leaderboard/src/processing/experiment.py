@@ -10,6 +10,7 @@ from pydantic import Field
 
 from ..errors import AdapterError
 from ..ingestion import MAX_MEMORY_BYTES, split_utf8
+from ..models import SearchResponse
 from .extract import ProcessingError, validate_snapshot
 from .models import StrictModel, digest
 
@@ -33,6 +34,7 @@ class Publication(StrictModel):
     raw_owner: str
     derived_owner: str
     extraction_complete: bool
+    derived_only: bool = False
     raw: list[PublishedRecord] = Field(default_factory=list)
     derived: list[PublishedRecord] = Field(default_factory=list)
 
@@ -95,7 +97,16 @@ def derived_content(memory, sources):
     return "\n".join(parts)
 
 
-def publish(snapshot, memoria, experiment_id, *, enabled=False, checkpoint=None):
+def publish(
+    snapshot,
+    memoria,
+    experiment_id,
+    *,
+    enabled=False,
+    checkpoint=None,
+    derived_only=False,
+    previous=None,
+):
     if not enabled:
         return None
     validate_snapshot(snapshot)
@@ -124,6 +135,7 @@ def publish(snapshot, memoria, experiment_id, *, enabled=False, checkpoint=None)
         raw_owner=raw_owner,
         derived_owner=derived_owner,
         extraction_complete=snapshot.complete,
+        derived_only=derived_only,
     )
     sources = {s.source_id: s for s in snapshot.history.messages}
     plan = []
@@ -159,10 +171,13 @@ def publish(snapshot, memoria, experiment_id, *, enabled=False, checkpoint=None)
             body["observed_at"] = stamp
         plan.append((owner, body, record))
 
-    for source in sources.values():
-        header, content = source_content(source)
-        for part, text in enumerate(split_utf8(content, MAX_MEMORY_BYTES - len(header.encode()))):
-            add("raw", header + text, [source.source_id], [source.source_id, part], {})
+    if not derived_only:
+        for source in sources.values():
+            header, content = source_content(source)
+            for part, text in enumerate(
+                split_utf8(content, MAX_MEMORY_BYTES - len(header.encode()))
+            ):
+                add("raw", header + text, [source.source_id], [source.source_id, part], {})
     for identity, memory in snapshot.memories().items():
         source_ids = sorted({e.source_id for e in memory.evidence})
         add(
@@ -177,11 +192,32 @@ def publish(snapshot, memoria, experiment_id, *, enabled=False, checkpoint=None)
                 "candidate": memory.model_dump(),
             },
         )
+    if previous is not None:
+        if (
+            previous.snapshot_hash != publication.snapshot_hash
+            or previous.raw_owner != raw_owner
+            or previous.derived_owner != derived_owner
+            or previous.derived_only != derived_only
+        ):
+            raise ProcessingError("publication_resume_mismatch")
+        prior_records = {r.marker: r for r in [*previous.raw, *previous.derived]}
+        for _, _, record in plan:
+            prior = prior_records.get(record.marker)
+            if (
+                prior
+                and prior.status == "ready"
+                and prior.memory_id
+                and prior.content_sha256 == record.content_sha256
+                and prior.source_ids == record.source_ids
+            ):
+                record.status, record.memory_id = "ready", prior.memory_id
     # Save a full pending manifest first: a mid-publication interruption cannot
     # masquerade as a complete, shorter candidate set.
     if checkpoint:
         checkpoint(publication)
     for owner, body, record in plan:
+        if record.status == "ready":
+            continue
         try:
             if len(body["content"].encode()) > MAX_MEMORY_BYTES:
                 raise ProcessingError("derived_content_too_large")
@@ -213,6 +249,8 @@ def search(
     token_budget=8192,
     encoding="o200k_base",
     encoder=None,
+    baseline=None,
+    allow_partial_extraction=False,
 ):
     if type(top_k) is not int or not 1 <= top_k <= 100:
         raise ProcessingError("top_k_invalid")
@@ -230,8 +268,14 @@ def search(
     )
     if expected != (publication.raw_owner, publication.derived_owner):
         raise ProcessingError("publication_scope_mismatch")
-    if not publication.raw_ready:
+    if baseline is None and not publication.raw_ready:
         raise ProcessingError("raw_publication_incomplete")
+    if baseline is not None:
+        # This explicit mode holds the original retrieval context fixed across
+        # A/C, rather than attributing re-ingestion/retrieval drift to processing.
+        baseline = SearchResponse.model_validate(baseline)
+        if len(baseline.data) > top_k:
+            raise ProcessingError("baseline_exceeds_top_k")
     if encoder is None:
         import tiktoken
 
@@ -260,15 +304,23 @@ def search(
             )
         return items
 
-    raw = channel("raw")
+    raw = (
+        channel("raw")
+        if baseline is None
+        else [
+            {"id": item.id, "content": item.content, "channel": "raw", "source_ids": []}
+            for item in baseline.data
+        ]
+    )
     derived = []
     state = "disabled"
     if enable_derived:
         state = "not_ready"
-        if publication.derived_ready:
+        published = all(r.status == "ready" and r.memory_id for r in publication.derived)
+        if publication.derived_ready or (allow_partial_extraction and published):
             try:
                 derived = channel("derived") if publication.derived else []
-                state = "ready"
+                state = "ready" if publication.extraction_complete else "partial_extraction"
             except (AdapterError, ProcessingError):
                 state = "failed_raw_fallback"
     # Rank interleave instead of comparing incomparable upstream relevance scores.
@@ -310,4 +362,6 @@ def search(
         "raw_candidates": len(raw),
         "derived_candidates": len(derived),
         "selected_records": len(data),
+        "baseline_sha256": digest(baseline.model_dump()) if baseline is not None else None,
+        "extraction_complete": publication.extraction_complete,
     }

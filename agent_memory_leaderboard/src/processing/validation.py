@@ -84,6 +84,12 @@ def validate_candidate(candidate: Candidate, sources):
         return candidate
     anchors = [by_id[sid] for sid in event.anchor_source_ids]
     expected = normalized_time(expression, anchors) if expression else None
+    # Relative dates belong to the message containing the expression, not any
+    # other cited message that happens to have a convenient timestamp.
+    if expression and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", expression):
+        occurrences = {e.source_id for e in candidate.evidence if expression in e.quote}
+        if not occurrences or not occurrences <= set(event.anchor_source_ids):
+            expected = None
     supported_zone = event.timezone is None or (
         len(anchors) == 1 and event.timezone == anchors[0].timezone
     )

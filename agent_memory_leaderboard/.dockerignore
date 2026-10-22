@@ -1,5 +1,8 @@
 *
 !Dockerfile
 !requirements.lock
+!requirements-experiment.lock
 !src/
-!src/*.py
+!src/**
+**/__pycache__/
+**/*.pyc

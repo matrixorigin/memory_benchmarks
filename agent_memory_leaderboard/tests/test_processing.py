@@ -239,6 +239,17 @@ def test_missing_anchor_and_ambiguous_date_keep_original_expression():
         assert result.text == sources[0].content
 
 
+def test_relative_date_cannot_use_another_cited_messages_timestamp():
+    item = candidate()
+    item["event_time"]["anchor_source_ids"] = ["s2"]
+    item["event_time"]["start"] = "2026-10-19"
+    item["evidence"].append({"source_id": "s2", "quote": "Other context"})
+    sources = history(source(), source("s2", "Other context", message_time="2026-10-20")).messages
+    result = validate_candidate(Candidate.model_validate(item), sources)
+    assert result.event_time.start is None
+    assert "2026-10-19" not in result.text
+
+
 def test_windows_are_bounded_overlap_and_never_cross_conversations():
     task = extractor(window_messages=3, overlap_messages=1)
     h = history(*[source(f"s{i}", "a", conversation_id="c1" if i < 5 else "c2") for i in range(7)])
@@ -397,6 +408,42 @@ def test_publish_uses_isolated_owners_and_idempotent_replay():
     third = publish(changed, backend, "test", enabled=True)
     assert third.raw_owner == result.raw_owner
     assert third.derived_owner != result.derived_owner
+
+
+def test_publication_resume_skips_confirmed_writes():
+    backend = Backend()
+    task = snapshot()
+    prior = publish(task, backend, "test", enabled=True)
+    backend.writes.clear()
+    assert publish(task, backend, "test", enabled=True, previous=prior) == prior
+    assert backend.writes == []
+
+
+def test_frozen_baseline_mode_only_calls_derived_and_records_partial_coverage():
+    backend = Backend()
+    task = snapshot()
+    task.results[0].status = "partial"
+    task.results[0].reason = "candidate_validation_failed"
+    p = publish(task, backend, "test", enabled=True, derived_only=True)
+    assert not p.raw
+    assert all(owner == p.derived_owner for owner, _, _ in backend.writes)
+    baseline = {"data": [{"id": "old-1", "content": "unchanged original evidence"}]}
+    result = search(p, backend, "q", baseline=baseline, encoder=Encoder())
+    assert result["data"][0]["content"] == baseline["data"][0]["content"]
+    assert not backend.searches
+    combined = search(
+        p,
+        backend,
+        "q",
+        baseline=baseline,
+        enable_derived=True,
+        allow_partial_extraction=True,
+        encoder=Encoder(),
+    )
+    assert combined["derived_status"] == "partial_extraction"
+    assert len(combined["data"]) == 2
+    assert backend.searches == [p.derived_owner]
+    assert combined["baseline_sha256"] == result["baseline_sha256"]
 
 
 def test_publish_failure_continues_and_is_never_ready():

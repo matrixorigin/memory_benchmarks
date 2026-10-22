@@ -12,6 +12,7 @@ import httpx
 
 from ..config import Settings
 from ..memoria import Memoria
+from ..models import SearchResponse
 from .experiment import Publication, publish, search
 from .extract import Extractor, ProcessingError, ProcessorConfig
 from .models import History, Snapshot, read_json
@@ -71,11 +72,14 @@ def parser():
     publication.add_argument("--output", type=Path, required=True)
     publication.add_argument("--experiment-id", required=True)
     publication.add_argument("--enable-processing", action="store_true")
+    publication.add_argument("--derived-only", action="store_true")
     retrieval = commands.add_parser("search", help="Raw or raw+derived retrieval; no answering LLM")
     retrieval.add_argument("--input", type=Path, required=True, help="Publication manifest")
     retrieval.add_argument("--output", type=Path, required=True)
     retrieval.add_argument("--query-file", type=Path, required=True)
     retrieval.add_argument("--enable-derived-search", action="store_true")
+    retrieval.add_argument("--baseline-file", type=Path)
+    retrieval.add_argument("--allow-partial-extraction", action="store_true")
     retrieval.add_argument("--top-k", type=int, default=100)
     retrieval.add_argument("--token-budget", type=int, default=8192)
     retrieval.add_argument("--encoding", default="o200k_base")
@@ -92,6 +96,12 @@ def execute(args):
     if args.input.resolve() == args.output.resolve():
         raise ProcessingError("input_output_must_differ")
     if args.command == "search" and args.query_file.resolve() == args.output.resolve():
+        raise ProcessingError("input_output_must_differ")
+    if (
+        args.command == "search"
+        and args.baseline_file is not None
+        and args.baseline_file.resolve() == args.output.resolve()
+    ):
         raise ProcessingError("input_output_must_differ")
     with output_lock(args.output):
         if args.command == "extract":
@@ -135,7 +145,13 @@ def execute(args):
                     save(args.output, value.model_dump())
 
                 result = publish(
-                    snapshot, memoria, args.experiment_id, enabled=True, checkpoint=checkpoint
+                    snapshot,
+                    memoria,
+                    args.experiment_id,
+                    enabled=True,
+                    checkpoint=checkpoint,
+                    derived_only=args.derived_only,
+                    previous=previous,
                 )
                 print(
                     json.dumps(
@@ -148,7 +164,9 @@ def execute(args):
                         }
                     )
                 )
-                return 0 if result.raw_ready and result.derived_ready else 2
+                return (
+                    0 if (result.raw_ready or result.derived_only) and result.derived_ready else 2
+                )
             if args.output.exists():
                 raise ProcessingError("search_output_exists")
             with args.query_file.open(encoding="utf-8") as stream:
@@ -161,6 +179,10 @@ def execute(args):
                 top_k=args.top_k,
                 token_budget=args.token_budget,
                 encoding=args.encoding,
+                baseline=load(args.baseline_file, SearchResponse).model_dump()
+                if args.baseline_file
+                else None,
+                allow_partial_extraction=args.allow_partial_extraction,
             )
             save(args.output, result)
             print(
