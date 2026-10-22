@@ -20,6 +20,10 @@ HTTP validation, bounded retries, checkpointing, and reporting live in
 optional; local Answer/Eval uses explicit model endpoints and keys; retrieval requires only
 the Add/Search service and its Memoria backend.
 
+An opt-in [offline memory-processing experiment](docs/offline-memory-processing.md)
+can extract source-linked memories from public/synthetic history and compare raw
+versus combined retrieval in isolated scopes. It does not alter production Add/Search.
+
 Implements `POST /add` and `POST /search` from the
 [Agent Memory Leaderboard API guide](https://agentmemories.ai/api-guide).
 Supports the **Textual and Coding** tracks. Ordered text-only content arrays are
