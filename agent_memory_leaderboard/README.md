@@ -20,6 +20,12 @@ HTTP validation, bounded retries, checkpointing, and reporting live in
 optional; local Answer/Eval uses explicit model endpoints and keys; retrieval requires only
 the Add/Search service and its Memoria backend.
 
+Opt-in [calendar hints](docs/offline-memory-processing.md) append bounded relative-time
+annotations to original Search evidence without changing its count or order. Set
+`MEMORY_TIME_NORMALIZATION_ENABLED=true` to enable; the default is off. Add is unchanged,
+and no processing LLM, derived search, or additional database writes are involved.
+The older offline LLM extraction CLI remains separate for reproducing past experiments.
+
 Implements `POST /add` and `POST /search` from the
 [Agent Memory Leaderboard API guide](https://agentmemories.ai/api-guide).
 Supports the **Textual and Coding** tracks. Ordered text-only content arrays are

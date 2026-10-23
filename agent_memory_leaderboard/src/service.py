@@ -10,6 +10,7 @@ from .ingestion import message_parts
 from .journal import LEGACY_PROTOCOL, Journal
 from .memoria import Memoria
 from .models import AddRequest, AddResponse, Evidence, SearchRequest, SearchResponse, text_content
+from .temporal import MAX_RESPONSE_CHARS, annotate
 
 
 def digest(value: object) -> str:
@@ -143,14 +144,19 @@ class MemoryAdapter:
         )
         seen = set()
         evidence = []
+        annotation_budget = MAX_RESPONSE_CHARS
         for memory in memories:
             if memory.memory_id in seen:
                 continue
             seen.add(memory.memory_id)
+            content = memory.content
+            if self.settings.time_normalization_enabled:
+                content = annotate(content, memory.extra_metadata, budget=annotation_budget)
+                annotation_budget -= len(content) - len(memory.content)
             evidence.append(
                 Evidence(
                     id=memory.memory_id,
-                    content=memory.content,
+                    content=content,
                     score=memory.retrieval_score,
                     created_at=memory.created_at,
                 )
