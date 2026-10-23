@@ -24,8 +24,11 @@ class Settings:
     journal_log_all_operations: bool = False
     journal_slow_ms: float = 100
     journal_queue_timeout_seconds: float = 30
+    time_normalization_enabled: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.time_normalization_enabled) is not bool:
+            raise ValueError("MEMORY_TIME_NORMALIZATION_ENABLED must be a boolean")
         url = urlsplit(self.memoria_url)
         if (
             url.scheme not in {"http", "https"}
@@ -82,10 +85,14 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        time_normalization = os.getenv("MEMORY_TIME_NORMALIZATION_ENABLED", "false").lower()
+        if time_normalization not in {"true", "false", "1", "0"}:
+            raise ValueError("MEMORY_TIME_NORMALIZATION_ENABLED must be true/false or 1/0")
         journal_logging = os.getenv("ADAPTER_JOURNAL_LOG_ALL_OPERATIONS", "false").lower()
         if journal_logging not in {"true", "false", "1", "0"}:
             raise ValueError("ADAPTER_JOURNAL_LOG_ALL_OPERATIONS must be true/false or 1/0")
         return cls(
+            time_normalization_enabled=time_normalization in {"true", "1"},
             memoria_url=os.environ["MEMORIA_URL"].rstrip("/"),
             memoria_master_key=os.environ["MEMORIA_MASTER_KEY"],
             api_key=os.getenv("ADAPTER_API_KEY") or None,

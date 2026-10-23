@@ -159,6 +159,71 @@ def search(client, **kwargs):
     )
 
 
+def test_time_hints_preserve_add_payload_and_search_identity(settings, upstream):
+    from src.temporal import MAX_RESPONSE_CHARS
+
+    messages = [
+        {"role": "user", "content": "Yesterday I visited a museum.", "timestamp": 1689379200000},
+        {"role": "user", "content": "I collect stamps."},
+    ]
+    with running(settings, upstream) as client:
+        assert client.post("/add", json=addition(messages=messages)).status_code == 200
+        baseline = search(client).json()
+    writes_before = len(upstream.writes)
+    calls_before = len(upstream.calls)
+    with running(replace(settings, time_normalization_enabled=True), upstream) as client:
+        result = search(client).json()
+        assert client.post("/add", json=addition(messages=messages)).status_code == 200
+    assert len(upstream.writes) == writes_before
+    assert len(upstream.calls) == calls_before + 1  # One search; no derived query/model call.
+    assert len(result["data"]) == len(baseline["data"]) == 2
+    extra = 0
+    for original, annotated in zip(baseline["data"], result["data"], strict=True):
+        assert {k: v for k, v in original.items() if k != "content"} == {
+            k: v for k, v in annotated.items() if k != "content"
+        }
+        assert annotated["content"].startswith(original["content"])
+        extra += len(annotated["content"]) - len(original["content"])
+    assert extra <= MAX_RESPONSE_CHARS
+    assert result["data"][0] == baseline["data"][0]  # No time expression -> exact original.
+    assert '"calendar_value": "2023-07-14"' in result["data"][1]["content"]
+
+
+def test_time_hint_response_budget_never_evicts_originals(settings, upstream):
+    from src.temporal import MAX_RESPONSE_CHARS
+
+    with running(replace(settings, time_normalization_enabled=True), upstream) as client:
+        for index in range(100):
+            assert (
+                client.post(
+                    "/add",
+                    json=addition(
+                        request_id=f"budget-{index}",
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": f"Yesterday I visited museum {index}.",
+                                "timestamp": 1689379200000,
+                            }
+                        ],
+                    ),
+                ).status_code
+                == 200
+            )
+        result = search(client).json()["data"]
+    assert len(result) == 100
+    original = list(reversed(upstream.memories))
+    assert [r["id"] for r in result] == [r["memory_id"] for r in original]
+    assert all(r["content"].startswith(o["content"]) for r, o in zip(result, original, strict=True))
+    assert (
+        sum(len(r["content"]) - len(o["content"]) for r, o in zip(result, original, strict=True))
+        <= MAX_RESPONSE_CHARS
+    )
+    assert (
+        0 < sum(r["content"] != o["content"] for r, o in zip(result, original, strict=True)) < 100
+    )
+
+
 def test_round_trip_cross_session_and_user_isolation(settings, upstream):
     with running(settings, upstream) as client:
         first = addition()
