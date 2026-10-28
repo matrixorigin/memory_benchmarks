@@ -61,14 +61,14 @@ benchmark 请求 QA 当前部署的 Add/Search；Summary 与 JSON 记录环境�
 旧阿里云部署 workflow 已移除。QA 使用 `aml-qa-benchmark`
 只串行本仓库的 QA 评测；moi-gitops 在另一个仓库，同名 concurrency group 也不能跨仓库互斥。
 QA 评测前需要协调共享 Memoria 与 GitOps 发布；本 workflow 不宣称已自动冻结它们。
-QA gateway 初始限制一个活跃业务请求、每秒一个后端业务请求，完整历史可能明显慢于 dev。
+实际入口和后端限制以目标环境当前配置为准；运行前核对容量，不能从历史配置推断本轮能力。
 并发组不阻止其他本地客户端、AML 官方任务或手工操作；GitHub 默认只保留一个 pending
 运行，新 pending 可能替换旧 pending，不应同时排队多个部署／评测任务。
 
 ## Summary 与完整报告
 
-已完成运行的安全聚合指标与解释见[固定基线](baselines/README.md)。完整断点仍在
-对应 Actions artifact；Git 中的聚合报告不包含数据正文、回答或可恢复的 private cache。
+具体运行的基线、版本和验收记录保存在 Git 忽略的本地 `var/` 目录或受控运行记录中。
+公开文档仅说明如何生成和解释报告，不绑定某次环境验收结果。
 
 Summary 包含状态、评测进程耗时、写入分块数、已处理／已查询／跳过的问题数、空结果、
 有证据标签的问题数、召回率、Search P50／P95、按数据集 category 分组的结果及版本。
@@ -144,24 +144,17 @@ Summary 单列 eligible／scored／pending、评分覆盖率及两类失败题�
 缺失时不写入记忆。准备步骤不读取模型凭据。工作流安装锁定的 evaluation extra；
 适配器镜像不需要此 extra，也不需要重新部署。
 
-当前开发配置（2026-10-07）：回答和裁判的 MODEL 均为 `qwen-plus`，两个 BASE_URL
-均为 `https://dashscope.aliyuncs.com/compatible-mode/v1`，分别配置上述两个 API_KEY
-Secrets，复用已有百炼凭据。GitHub 配置已保存并回读确认；尚未验证本次凭据的模型
-调用或执行新契约基准。密钥不进入仓库或日志。
+根据所选模型服务填写上述 Variables 和 Secrets。示例配置不代表某个仓库已经配置凭据，
+也不代表模型调用或完整评测已通过验证。密钥不进入仓库或日志。
 
-运行 `AML benchmark` 时选择 `main`、`dataset=locomo`、`mode=answer-eval`、
+运行 `QA memory benchmark` 时选择 `main`、`dataset=locomo`、`mode=answer-eval`、
 `histories=1`、`top_k=100`，`runtime_label` 可留空。模型设置在 benchmark 进程中生效，
 不需要重新构建或部署 Memoria／适配器。qwen-plus 为提供商可更新别名，跨日期比较
 不能假定底层权重相同；长期可比实验需选择并记录可用快照版本。回答与裁判同模型的
 分数用于本地迭代，不能作为独立裁判或官方评分等价性的证明。
 
-正式 AML 的 Answer/Eval 由平台固定，我们的配置不会替换平台模型。官方 Full checklist
-写 Open-source Methods 的 Add 期望使用 `gpt-4o-mini`，商业产品无 Add/Search 模型限制；
-FAQ 仍写学术榜 embedding 为 `text-embedding-v4`、LLM 组件为 `gpt-4o-mini`、reranker
-不限制。两套组别名称的对应及纯存储 Add／上海 bge-m3 资格需向官方确认；不能用本地
-qwen-plus 配置推断正式参评合规。
-依据：[AML 文档](https://agentmemories.ai/zh-cn/docs)、
-[赛事 FAQ](https://agentmemoryleaderboard.ai/competition/)。
+正式 AML 的回答与评分由平台提供，本地配置不会替换平台模型。参赛组别和模型要求
+以[官方文档](https://agentmemoryleaderboard.ai/docs)为准，本地运行结果不证明正式参评合规。
 
 全部输入（指令、角色、问题、选项／问题日期、证据）按固定 `o200k_base` 编码加
 256 token 余量进行本地预算计数，上限 117760；保留完整记录的排名前缀。它不是所有
@@ -210,7 +203,7 @@ Answer/Eval 的 private cache 也受同一保留期约束，不能随报告公�
 报告按现有保留策略记录清理期限；120 分钟步骤被强制终止、runner 未执行 finally 时，
 最终报告步骤补写未设置的保留期限，不延长已有期限。
 Artifact 过期不清理 Memoria、用户库、journal 或历史快照；物理清理需要独立运维方案。
-正式评测前执行发布冻结及保留管理流程，见[比赛方案](../docs/competition-plan.md)。
+正式评测前与环境维护者协调发布冻结、版本记录和保留管理，见[部署参考](../../deploy/README.md)。
 
 该 workflow 消耗我们自己的 embedding、数据库和 Actions 资源，不消耗 AML 官方 Full
 配额。请求串行发送；限制 histories 和执行时长不等于完整的全局 QPS／token 预算。
@@ -224,10 +217,9 @@ Artifact 过期不清理 Memoria、用户库、journal 或历史快照；物理�
 | 作答（仅 answer-eval） | `BENCHMARK_ANSWER_API_KEY` | `AML_BENCHMARK_ANSWER_API_KEY` |
 | 判分（仅 answer-eval） | `BENCHMARK_JUDGE_API_KEY` | `AML_BENCHMARK_JUDGE_API_KEY` |
 
-本地完整 QA 配置保存在私有 `var/evaluation-qa.env`（当前独立 worktree 下），权限 0600、
-Git 忽略；模型名和 base URL 也已配置。GitHub 的上述三个 Secret 已配置，模型变量沿用
-qwen-plus / DashScope。本地真实 QA 最小链路已通过；GitHub-hosted runner 的端到端执行
-需在本 PR 合入后首次运行验证，Secret 已存在不等于运行已验证。
+本地配置可保存在 Git 忽略的 `var/evaluation-qa.env`，使用仅当前用户可读写的权限；
+模型名称、地址和凭据由操作者自行配置。不要将凭据是否存在写成链路验证结论，
+也不要把本地 private cache 或内部验收记录加入仓库。
 
 离线 CI 不使用任何业务 key。评测不需要 KUBECONFIG、Pulumi token、数据库密码、
 Memoria master key 或 embedding key；这些由 QA 后端和 GitOps 持有。当前服务运行于
