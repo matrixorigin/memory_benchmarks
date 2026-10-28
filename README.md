@@ -22,6 +22,7 @@ AML leaderboard scores remain separate acceptance work. See the
 | Try the deployed API | Adapter access key | [API quick start](#try-the-deployed-api) |
 | Run a benchmark in Actions | Workflow access; configured adapter access key | [Run a benchmark](#run-a-benchmark) |
 | Develop the adapter locally | Python 3.12+, uv, running Memoria, master key | [Local development](#local-development) |
+| Reproduce a fixed deployment | Pinned mb/Memoria versions and configured backend | [Deployment and reproduction](deploy/README.md#本地复现) |
 | Deploy or update services | Configured deployment Secrets and Variables | [Deployment](#deploy-or-update-services) |
 | Understand the design | No runtime credentials | [Architecture](#how-it-works) and [adapter guide](agent_memory_leaderboard/README.md) |
 

@@ -46,6 +46,139 @@ Memoria 的数据库和 embedding 配置由后端维护，普通 Add/Search 客�
 内部文档可以使用仓库根目录的 `var/private-docs/`，或适配器目录下的 `var/`。
 这些路径不属于公开文档依赖，复制模板时也不应把它们加入构建上下文或提交。
 
+## 本地复现
+
+### 1. 固定版本与依赖
+
+准备 Git、Python 3.12+ 和 uv。部署完整后端时还需要 Docker 与 Compose；
+使用 Kubernetes 模板时需要 Helm 及一个独立的复现环境。
+
+检出待复现的完整 mb commit，不使用随时间变化的 `main` 作为版本标识：
+
+```sh
+git clone https://github.com/matrixorigin/memory_benchmarks.git
+cd memory_benchmarks
+git checkout --detach '<MB_FULL_COMMIT_SHA>'
+```
+
+用同一套源码运行该版本的锁定依赖。Memoria 必须支持 owner 隔离、metadata 查询
+及相应写入协议；具体兼容行为见[重试与部署状态](../agent_memory_leaderboard/README.md#retries-and-deployment-state)。
+若已有兼容 Memoria 服务，可直接执行第 3 步。
+
+### 2. 准备 Memoria 与数据库
+
+从 [Memoria 仓库](https://github.com/matrixorigin/memoria)检出待复现的完整 commit，
+按照该版本 README 的 Quick Start 和 `docker-compose.yml` 配置 MatrixOne、API 和 embedding。
+Memoria 与 MatrixOne 的配置属于后端部署；只启动 mb 不会自动创建完整后端。
+
+最低需要核对：
+
+- MatrixOne 可连接，数据库运行账号具备所选存储模式所需的建库、迁移与读写权限。
+- Memoria master key 已配置，API 可访问；该 key 与适配器的客户端 key 分开。
+- embedding 服务地址、模型、维度和鉴权有效，维度与该版本数据库配置一致。
+- 数据目录持久化；重建实例、变更模型或维度不能被当作无影响的镜像替换。
+
+新建完整 Compose 环境的操作由 Memoria 对应版本的部署说明定义。
+若使用本仓库的 [Compose overlay](../agent_memory_leaderboard/README.md#docker-deployment-with-memoria)，
+它会将适配器接入该 Compose 的网络并持久化 journal；先配置好上游 `.env`，
+不要同时按 overlay 和下方 uv 方式启动两个占用相同端口的适配器。
+
+### 3. 启动适配器
+
+以下命令在仓库根目录开始执行。先填写自己的 Memoria 地址、与后端一致的 master key
+和独立的适配器 key；示例值不能作为真实凭据使用。
+
+```sh
+cd agent_memory_leaderboard
+uv sync --locked
+mkdir -p var
+chmod 700 var
+cat > var/reproduction.env <<'EOF'
+MEMORIA_URL=http://127.0.0.1:8100
+MEMORIA_MASTER_KEY='replace-with-your-memoria-master-key'
+ADAPTER_API_KEY='replace-with-a-separate-adapter-key'
+MEMORIA_NAMESPACE=local-reproduction-v1
+ADAPTER_STATE_DIR=./var
+MEMORY_TIME_NORMALIZATION_ENABLED=false
+EOF
+chmod 600 var/reproduction.env
+# 编辑本机的 var/reproduction.env，替换地址和凭据后，再显式加载：
+set -a
+. ./var/reproduction.env
+set +a
+uv run --no-sync uvicorn src.app:create_app --factory --host 127.0.0.1 --port 8000
+```
+
+应用不自动加载 env 文件。此例的 journal 保存在 `agent_memory_leaderboard/var/`，
+重启或重试时保留该目录、namespace、用户和请求标识。需要全新独立运行时使用新的
+namespace 并单独管理旧数据，不能通过清空 journal 恢复未知写入。
+时间注释在示例中保持关闭；复现开启该功能的版本时应明确设为 `true` 并记录。
+
+### 4. 验证链路与运行 benchmark
+
+另开终端，在同一适配器目录加载自己刚才填写的环境文件，然后运行：
+
+```sh
+set -a
+. ./var/reproduction.env
+set +a
+curl --fail --silent --show-error http://127.0.0.1:8000/ready
+uv run --no-sync python -m src.smoke --adapter-url http://127.0.0.1:8000
+```
+
+项目 smoke 会实际写入并检索测试记忆，需要正常的数据库和 embedding 服务，
+会消耗资源；它不等于 AML 官方 Smoke，也不替代完整 benchmark。
+该版本的数据准备、运行命令、评分协议和已知限制见
+[benchmark 总览](../agent_memory_leaderboard/benchmarks/README.md)及
+[评估说明](../agent_memory_leaderboard/benchmarks/EVALUATION.md#local-commands)。
+对齐官方结果还应核对官方冻结的版本、协议及模型要求，不能仅凭本地 smoke 成功判断一致。
+
+## Kubernetes 模板复现
+
+`chart/` 同时渲染 Memoria 与适配器，不包含 MatrixOne 数据库、embedding 服务、
+运行 Secret、registry Secret 或 journal PVC 的完整创建流程。这些资源必须由
+独立复现环境的维护者提前配置；相关默认名称可在 [values.yaml](chart/values.yaml) 中修改。
+
+| 前置资源／配置 | 模板要求 |
+| --- | --- |
+| 数据库与 embedding | Memoria Pod 可访问，模型和维度一致 |
+| 运行 Secret | 默认 `aml-runtime`，包含 `DATABASE_URL`、`MASTER_KEY`、`EMBEDDING_API_KEY`、`ADAPTER_API_KEY` |
+| 镜像拉取 Secret | 默认 `aml-registry`，适用于所选镜像仓库 |
+| journal PVC | 默认 `aml-adapter-state`，可写且能供 UID/GID 1000 使用 |
+| 镜像与架构 | 适配器及 Memoria 的 repository/digest；当前模板选择 `amd64` 节点 |
+| 入口（可选） | Ingress controller、DNS 与 TLS；开启证书模板时还需对应 ClusterIssuer |
+
+维护者在 Git 忽略的 `var/` 中准备私有 values，填写两份镜像的真实 repository/digest、
+embedding、Secret、PVC、资源和入口配置。若改变 release 名称，也要同步核对
+`memoria.url`，避免继续引用默认服务名。运行 Secret 中的数据库账号需满足
+当前模板启用的 Memoria multi-database 模式所需权限。
+
+从仓库根目录可先执行离线模板检查：
+
+```sh
+python3 deploy/scripts/render_chart.py
+```
+
+该脚本使用合成值检查不同模板分支，不访问集群，也不能证明真实凭据或目标环境可用。
+完成配置后，由独立复现环境维护者按其发布流程安装 chart；本仓库的 QA benchmark
+不会替其准备这些资源。现有共享环境仍通过对应 GitOps PR 发布。
+
+## 复现记录
+
+部署文档保留操作方法；每次运行还应单独保存以下非秘密元数据：
+
+| 项目 | 需要固定／记录的值 |
+| --- | --- |
+| 源码 | mb、Memoria 完整 commit SHA |
+| 运行镜像 | 适配器、Memoria、MatrixOne 的 tag/digest 与架构 |
+| 模型与功能 | embedding 模型／维度、相关模型版本、时间注释等开关 |
+| 部署配置 | namespace／隔离规则、持久化、并发、排队、超时及入口限制 |
+| 评测契约 | 数据版本／hash、范围、Top K、chunking、回答／Judge 的版本与预算 |
+| 执行结果 | 开始结束时间、运行标识、成功／失败与评分覆盖率 |
+
+记录凭据的配置方式，不记录真实值。公开方法的固定仓库版本与部署步骤应可核对；
+内部环境地址、具体运行日志和验收进展可以留在受控本地记录中。
+
 ## 发布流程
 
 1. 固定源码、镜像和配置版本，核对与已有数据库和 journal 的兼容性。
