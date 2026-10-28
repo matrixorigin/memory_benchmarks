@@ -3,12 +3,12 @@
 [![CI - Lint, Tests & Adapter Build](https://github.com/matrixorigin/memory_benchmarks/actions/workflows/aml-ci.yml/badge.svg?branch=main)](https://github.com/matrixorigin/memory_benchmarks/actions/workflows/aml-ci.yml)
 
 Public memory benchmarks, an Agent Memory Leaderboard (AML) Add/Search adapter,
-and a dedicated dev deployment for [Memoria](https://github.com/matrixorigin/memoria).
+and deployment templates for [Memoria](https://github.com/matrixorigin/memoria).
 
 This repository helps the team evaluate how well Memoria retrieves evidence from
 conversation histories. It prepares public datasets, writes the original history
 through `/add`, queries `/search`, and records retrieval metrics and run checkpoints.
-It also owns the adapter and its Aliyun dev deployment pipeline.
+Deployment templates are included; live environments have their own release process.
 
 **Default mode: retrieval diagnostics.** LoCoMo and LongMemEval-S also support
 optional local Answer/Eval. Native evaluator parity, coding scores and official
@@ -23,7 +23,7 @@ AML leaderboard scores remain separate acceptance work. See the
 | Run a benchmark in Actions | Workflow access; configured adapter access key | [Run a benchmark](#run-a-benchmark) |
 | Develop the adapter locally | Python 3.12+, uv, running Memoria, master key | [Local development](#local-development) |
 | Deploy or update services | Configured deployment Secrets and Variables | [Deployment](#deploy-or-update-services) |
-| Understand the design | No runtime credentials | [Competition design](agent_memory_leaderboard/docs/competition-plan.md) |
+| Understand the design | No runtime credentials | [Architecture](#how-it-works) and [adapter guide](agent_memory_leaderboard/README.md) |
 
 ## How it works
 
@@ -115,9 +115,8 @@ not automatically clean it up.
 | `GET /docs` | Interactive request/response documentation |
 
 Healthy probes alone do not validate authentication, model calls, or retrieval
-quality. The dev deployment and seven-check live API integration smoke passed on
-2026-10-06; the [acceptance record](agent_memory_leaderboard/docs/competition-plan.md#当前交付状态)
-contains the actual revisions and remaining validation scope.
+quality. Verify these paths against the intended environment before a benchmark;
+this guide does not certify a particular deployment or official evaluation run.
 
 For the complete field contract and Python example, see
 [public integration](deploy/README.md#接入已部署的-addsearch). For retry and error
@@ -170,8 +169,9 @@ not consume official AML Full quota.
 
 See the [benchmark workflow guide](agent_memory_leaderboard/benchmarks/CI.md)
 for data provenance, metric definitions, timeout and resume behavior.
-Recorded self-run results and their limitations are available in
-[baseline reports](agent_memory_leaderboard/benchmarks/baselines/README.md).
+Keep environment-specific baseline reports, checkpoints and run notes under the
+Git-ignored `var/` directory. Record the code, dataset and configuration used; do
+not treat local results as official AML scores.
 
 ### Interpreting the metrics
 
@@ -245,17 +245,14 @@ local integration smoke, benchmark commands, and a Memoria Docker Compose overla
 
 ## Deploy or update services
 
-QA services are managed in **moi-gitops**, stack `idc`: the `aml-qa` unit owns the
-adapter and the `memoria` unit owns shared Memoria. See the
-[QA deployment handbook](https://github.com/matrixorigin/moi-gitops/blob/main/docs/handbooks/qa-aml-adapter.md).
-The old Aliyun direct-deployment workflow has been removed. This repository's
-active CI/benchmark workflows do not deploy to Aliyun or require its cluster,
-SQL or Memoria administration credentials. Legacy deployment code and its
-[reference guide](deploy/README.md) remain for historical reference.
+See the [deployment reference](deploy/README.md) for the template layout,
+configuration boundaries and Add/Search integration. The active workflows in
+this repository run checks and optional QA benchmarks; they do not deploy an
+application. Shared environments use their existing reviewed release process.
 
-The adapter image build → moi-gitops image-update PR workflow is follow-up work.
-ACR still hosts the application images, and the configured qwen-plus answer/judge
-service still uses DashScope. These dependencies are separate from hosting QA.
+Deployment plans, environment-specific acceptance records and internal run notes
+are local operator material, rather than public usage documentation. Keep them
+under Git-ignored `var/private-docs/`; do not link public guides to local files.
 
 ## Workflows at a glance
 
@@ -268,13 +265,13 @@ service still uses DashScope. These dependencies are separate from hosting QA.
 
 ```text
 memory_benchmarks/
-├── .github/workflows/          # Offline CI, dev deployment, manual benchmark
+├── .github/workflows/          # Offline CI and manual benchmark
 ├── agent_memory_leaderboard/
 │   ├── src/                   # Adapter, journal, HTTP client, shared benchmark program
 │   ├── benchmarks/            # Parsers, preparation, entrypoints and CI guide
 │   ├── scripts/               # Local launchers and Actions preparation/reporting
 │   ├── tests/                 # Adapter and benchmark tests using simulated backends
-│   ├── docs/                  # Maintained design and review references
+│   ├── docs/                  # Public feature and experiment guides
 │   └── compose.adapter.yaml   # Overlay for Memoria Docker Compose
 └── deploy/
     ├── chart/                 # Helm resources for Memoria and adapter
@@ -289,9 +286,9 @@ when obtaining or sharing its data.
 
 ## Design and contribution
 
-The maintained [competition design](agent_memory_leaderboard/docs/competition-plan.md)
-records architecture, decisions, verified delivery status, and remaining work.
-Detailed guides own operational instructions; this README is the project entrypoint.
+The architecture overview above and the public adapter, deployment and benchmark
+guides describe supported behavior. Keep internal plans, live acceptance records
+and experiment outputs in Git-ignored local storage.
 
 Explain the design, validation evidence, and effect on API behavior or evaluation
 comparability in each PR. Preserve provenance and user isolation, keep gold data

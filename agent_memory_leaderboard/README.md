@@ -59,25 +59,13 @@ It checks adapter liveness, not Memoria/database/embedding readiness.
 `GET /ready` checks journal readability and the upstream Memoria health endpoint,
 without writing memories or invoking a model. It is a dependency-availability
 check, not evidence that Add/Search or the embedding provider works correctly.
-The deployment target is the Aliyun dev unit cluster, using a dedicated Memoria
-backend and database login. Local evaluation remains available.
-See [competition design](docs/competition-plan.md) for runtime scope and workload
-budgets. The offline CI checks code and builds the adapter image without
-publishing or deploying it. Memoria source builds run only in the dev deployment
-workflow when updating Memoria in source mode, including preview. Adapter-only
-updates and existing-image mode skip Memoria builds.
-The [dev deployment workflow](../deploy/README.md) defaults to building Memoria
-from its `main` branch; another branch, tag, commit, or existing image can be selected.
-It publishes the selected images and deploys both services by digest through an
-independent Pulumi stack, recording the actual source commit for each source build.
-Public access requires DNS; the existing cert-manager ClusterIssuer automatically
-issues and renews the TLS Secret.
-
-The Aliyun dev endpoint is deployed at `https://aml.cn-dev.matrixone.tech`.
-See the [deployment steps and Actions inputs](../deploy/README.md#发布流程) and
-[public curl/Python integration examples](../deploy/README.md#接入已部署的-addsearch).
-Public clients need only the adapter API key; they do not need Memoria master,
-database, or Kubernetes credentials.
+For local development, configure a running Memoria service and use the adapter's
+loopback endpoint. Hosted environments supply their own endpoint, capacity and
+release configuration; see the [deployment reference](../deploy/README.md).
+The offline CI checks code and builds the adapter without deploying it. The
+manual QA benchmark calls its configured QA service and does not select or
+update a deployment. Public clients use only the adapter key; database,
+Kubernetes and Memoria administration credentials stay with the operators.
 
 ## Contract verification
 
@@ -90,9 +78,9 @@ For submission, use public endpoint URLs without embedded credentials; the
 localhost examples below are for development. Enable authentication for Full.
 Configure proxy/load-balancer request timeouts for the documented 30-minute
 request window. `MEMORIA_TIMEOUT_SECONDS` controls each upstream call (default
-120 seconds), not the total Add duration. The deployed dev endpoint has passed
-the project's live integration smoke; official platform Smoke and long-request
-validation remain pending. See the [current acceptance status](docs/competition-plan.md#当前交付状态).
+120 seconds), not the total Add duration. A local smoke, a deployment health
+check and an official AML Smoke are separate checks; keep their run records and
+version bindings outside the public usage guide.
 
 Concurrent Add/Search requests can queue native Memoria calls without changing
 synchronous Add semantics. Set `MEMORIA_MAX_CONCURRENCY=1` and

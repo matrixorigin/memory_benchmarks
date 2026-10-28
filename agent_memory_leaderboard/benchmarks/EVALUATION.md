@@ -41,7 +41,7 @@ flow, but the complete official judge prompts and a reproducible implementation
 were not found in the documentation checked on 2026-10-07. The prompts in
 `src/judges/` come from the public benchmark repositories, not from AML.
 See the [official documentation](https://agentmemories.ai/zh-cn/docs) and
-[competition readiness plan](../docs/competition-plan.md#正式参评前的工作).
+[deployment reference](../../deploy/README.md).
 
 ## LongMemEval answer reader
 
