@@ -156,7 +156,10 @@ def test_readiness_does_not_queue_behind_an_active_journal_transaction(settings)
         with TestClient(create_app(settings, client=http)) as client:
             with ThreadPoolExecutor() as pool:
                 with journal.connect("record") as db:
-                    db.execute("INSERT INTO requests VALUES ('uncommitted', 'fingerprint', 0)")
+                    db.execute(
+                        "INSERT INTO requests(key, fingerprint, complete) VALUES (?, ?, 0)",
+                        ("uncommitted", "fingerprint"),
+                    )
                     probe = pool.submit(client.get, "/ready")
                     assert probe.result(timeout=1).status_code == 200
 

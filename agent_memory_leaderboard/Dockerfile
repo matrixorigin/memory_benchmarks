@@ -9,6 +9,7 @@ RUN if [ "$INSTALL_EXPERIMENT_DEPS" = "true" ]; then \
     fi
 RUN useradd --uid 1000 --create-home adapter && mkdir /app/var && chown adapter /app/var
 COPY src ./src
+RUN python -m src.embedding_tokens
 USER adapter
 EXPOSE 8000
 CMD ["uvicorn", "src.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]

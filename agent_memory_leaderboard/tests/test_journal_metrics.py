@@ -51,7 +51,8 @@ def test_default_add_summary_includes_idempotent_replay_without_payloads(tmp_pat
     summaries = events(caplog, "journal_add_summary")
     assert [e["http_status"] for e in summaries] == [200, 200, 400]
     assert summaries[0]["operations"]["record"]["count"] == 2
-    assert summaries[1]["operations"]["prepare_write"]["count"] == 1
+    assert summaries[1]["operations"]["state"]["count"] == 1
+    assert "prepare_write" not in summaries[1]["operations"]
     assert "record" not in summaries[1]["operations"]
     assert len({e["add_trace"] for e in summaries}) == 3
     assert all(0 <= e["journal_fraction"] <= 1.001 for e in summaries)
@@ -180,7 +181,10 @@ def test_body_exception_rolls_back_without_logging_exception_text(tmp_path, capl
     journal = Journal(tmp_path, slow_ms=1e9)
     caplog.set_level(logging.INFO, logger="uvicorn.error")
     with pytest.raises(RuntimeError), journal.connect("begin") as db:
-        db.execute("INSERT INTO requests VALUES (?, ?, 0)", ("private-request", "private-body"))
+        db.execute(
+            "INSERT INTO requests(key, fingerprint, complete) VALUES (?, ?, 0)",
+            ("private-request", "private-body"),
+        )
         raise RuntimeError("synthetic-private-exception")
     with sqlite3.connect(journal.path) as db:
         assert db.execute("SELECT count(*) FROM requests").fetchone() == (0,)

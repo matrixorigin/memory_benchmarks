@@ -29,6 +29,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: agent_memory_leaderboard/uv.lock
       - run: uv sync --locked --extra evaluation
+      - run: uv run --no-sync python -m src.embedding_tokens
       - run: uv run --no-sync ruff check src tests benchmarks scripts/benchmark_ci.py ../deploy/scripts ../deploy/tests
       - run: uv run --no-sync pytest -q
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4

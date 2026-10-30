@@ -1,6 +1,7 @@
 """Durable idempotency state, with process-safe locks on a shared local disk."""
 
 import fcntl
+import json
 import math
 import sqlite3
 import threading
@@ -69,6 +70,10 @@ class Journal:
                     PRIMARY KEY (request_key, position)
                 )
             """)
+            request_columns = {row[1] for row in db.execute("PRAGMA table_info(requests)")}
+            if "render_policy" not in request_columns:
+                db.execute("""ALTER TABLE requests ADD COLUMN render_policy TEXT NOT NULL
+                              DEFAULT '{"version":1}'""")
             columns = {row[1] for row in db.execute("PRAGMA table_info(writes)")}
             if "protocol" not in columns:
                 db.execute("ALTER TABLE writes ADD COLUMN protocol TEXT NOT NULL DEFAULT 'legacy'")
@@ -208,7 +213,7 @@ class Journal:
                         raise
 
     @staticmethod
-    def _begin(db, key: str, fingerprint: str) -> bool:
+    def _begin(db, key: str, fingerprint: str, render_policy: dict | None = None) -> bool:
         row = db.execute(
             "SELECT fingerprint, complete FROM requests WHERE key = ?", (key,)
         ).fetchone()
@@ -220,12 +225,46 @@ class Journal:
                     "restore the original payload",
                 )
             return bool(row[1])
-        db.execute("INSERT INTO requests(key, fingerprint) VALUES (?, ?)", (key, fingerprint))
+        db.execute(
+            "INSERT INTO requests(key, fingerprint, render_policy) VALUES (?, ?, ?)",
+            (key, fingerprint, json.dumps(render_policy or {"version": 1}, sort_keys=True)),
+        )
         return False
 
     def begin(self, key: str, fingerprint: str) -> bool:
         with self.connect("begin") as db:
             return self._begin(db, key, fingerprint)
+
+    def request_policy(self, key: str, fingerprint: str, default: dict) -> dict | None:
+        """Read under lock(key); the first prepare_write persists the chosen policy.
+
+        Existing rows migrate to byte-only v1. Never reinterpret old positions
+        or rewrite old receipts when the default budget changes. None is a
+        completed replay (after checking the payload fingerprint).
+        """
+        with self.connect("state") as db:
+            row = db.execute(
+                "SELECT fingerprint, complete, render_policy FROM requests WHERE key = ?", (key,)
+            ).fetchone()
+            if row is None:
+                return default
+            if row[0] != fingerprint:
+                raise AdapterError(
+                    400,
+                    "request_id was already used with a different payload; "
+                    "restore the original payload",
+                )
+            if row[1]:
+                return None
+            try:
+                policy = json.loads(row[2])
+            except (TypeError, ValueError):
+                raise AdapterError(
+                    503, "Invalid journal rendering policy; check adapter version"
+                ) from None
+            if not isinstance(policy, dict):
+                raise AdapterError(503, "Invalid journal rendering policy; check adapter version")
+            return policy
 
     @staticmethod
     def _state(db, key: str, position: int) -> tuple[str, str | None, str]:
@@ -251,7 +290,7 @@ class Journal:
         )
 
     def prepare_write(
-        self, key: str, fingerprint: str, position: int
+        self, key: str, fingerprint: str, position: int, *, render_policy: dict | None = None
     ) -> tuple[str, str | None, str] | None:
         """Register the request and persist send intent in one durable transaction.
 
@@ -259,7 +298,7 @@ class Journal:
         Legacy unknown outcomes must never be converted to atomic receipts.
         """
         with self.connect("prepare_write") as db:
-            if self._begin(db, key, fingerprint):
+            if self._begin(db, key, fingerprint, render_policy):
                 return None
             state, memory_id, protocol = self._state(db, key, position)
             if protocol not in {LEGACY_PROTOCOL, IDEMPOTENT_PROTOCOL}:

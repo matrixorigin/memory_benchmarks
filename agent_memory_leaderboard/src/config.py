@@ -25,8 +25,14 @@ class Settings:
     journal_slow_ms: float = 100
     journal_queue_timeout_seconds: float = 30
     time_normalization_enabled: bool = False
+    embedding_token_budget: int = 7680
 
     def __post_init__(self) -> None:
+        if (
+            type(self.embedding_token_budget) is not int
+            or not 128 <= self.embedding_token_budget <= 8192
+        ):
+            raise ValueError("ADAPTER_EMBEDDING_TOKEN_BUDGET must be an integer in [128, 8192]")
         if type(self.time_normalization_enabled) is not bool:
             raise ValueError("MEMORY_TIME_NORMALIZATION_ENABLED must be a boolean")
         url = urlsplit(self.memoria_url)
@@ -92,6 +98,7 @@ class Settings:
         if journal_logging not in {"true", "false", "1", "0"}:
             raise ValueError("ADAPTER_JOURNAL_LOG_ALL_OPERATIONS must be true/false or 1/0")
         return cls(
+            embedding_token_budget=int(os.getenv("ADAPTER_EMBEDDING_TOKEN_BUDGET", "7680")),
             time_normalization_enabled=time_normalization in {"true", "1"},
             memoria_url=os.environ["MEMORIA_URL"].rstrip("/"),
             memoria_master_key=os.environ["MEMORIA_MASTER_KEY"],

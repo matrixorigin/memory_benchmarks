@@ -28,7 +28,10 @@ def test_other_journal_instance_waits_before_opening_a_competing_sqlite_connecti
 
     def hold_write():
         with holder.connect("record") as db:
-            db.execute("INSERT INTO requests VALUES ('holder', 'fingerprint', 0)")
+            db.execute(
+                "INSERT INTO requests(key, fingerprint, complete) VALUES (?, ?, 0)",
+                ("holder", "fingerprint"),
+            )
             entered.set()
             assert release.wait(5)
 
@@ -114,7 +117,10 @@ def test_queue_timeout_does_not_open_sqlite_or_change_state_and_can_retry(
 def _child_holding_transaction(directory, entered):
     journal = Journal(directory)
     with journal.connect("record") as db:
-        db.execute("INSERT INTO requests VALUES ('uncommitted', 'fingerprint', 0)")
+        db.execute(
+            "INSERT INTO requests(key, fingerprint, complete) VALUES (?, ?, 0)",
+            ("uncommitted", "fingerprint"),
+        )
         entered.set()
         time.sleep(60)
 
@@ -143,7 +149,10 @@ def test_process_exit_releases_gate_and_rolls_back_uncommitted_state(tmp_path):
 def test_operation_failure_releases_slot_and_preserves_rollback(tmp_path):
     journal = Journal(tmp_path)
     with pytest.raises(RuntimeError), journal.connect("record") as db:
-        db.execute("INSERT INTO requests VALUES ('rolled-back', 'fingerprint', 0)")
+        db.execute(
+            "INSERT INTO requests(key, fingerprint, complete) VALUES (?, ?, 0)",
+            ("rolled-back", "fingerprint"),
+        )
         raise RuntimeError("synthetic failure")
     assert journal.begin("rolled-back", "fingerprint") is False
 

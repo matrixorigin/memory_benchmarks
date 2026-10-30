@@ -10,6 +10,7 @@ from starlette.exceptions import HTTPException
 
 from .budget import request_budget
 from .config import Settings
+from .embedding_tokens import load_tokenizer
 from .errors import AdapterError
 from .journal import Journal
 from .memoria import Memoria
@@ -20,6 +21,7 @@ from .service import MemoryAdapter
 
 def create_app(settings: Settings | None = None, *, client: httpx.Client | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
+    load_tokenizer()  # Fail startup rather than accept traffic with missing/wrong assets.
     http = client or httpx.Client(follow_redirects=False, trust_env=False)
     # Keep probe connections and thread capacity independent of long Add/Search calls.
     probe_http = client or httpx.Client(

@@ -44,7 +44,7 @@ def test_message_chunks_include_header_in_byte_limit_and_join_text_parts():
             ],
         }
     )
-    parts = list(message_parts(message))
+    parts = list(message_parts(message, token_budget=None))
     header = "[user at 1970-01-01T00:00:00.000Z]\n"
     assert len(parts) == 3
     assert all(

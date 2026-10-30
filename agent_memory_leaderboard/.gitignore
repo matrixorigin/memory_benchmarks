@@ -22,3 +22,6 @@ state/*.json
 *.sqlite3-journal
 *.sqlite3-wal
 *.sqlite3-shm
+
+# Pinned public tokenizer downloaded and verified during setup/build.
+src/assets/tokenizer.json
