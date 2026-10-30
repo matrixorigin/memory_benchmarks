@@ -670,7 +670,12 @@ adapter worker/replica and stop the old version before upgrading. Do not roll
 back to a byte-only binary with unfinished v2 requests. Token-policy receipts use
 an unknown-to-old-code protocol, and SQLite triggers reject v1 writes to any new
 position of a v2 request. Old versions fail with 503 instead of silently skipping
-content. These guards require retaining the journal schema and triggers. Preserve
+content. If an old binary reaches the SQLite trigger, it raises an IntegrityError
+with `Unsupported rendering protocol`. The pre-upgrade journal catches SQLite
+errors and returns generic HTTP 503 `Idempotency journal unavailable`, rather than
+the explicit version-check message from its protocol whitelist. Check the deployed
+binary/journal versions first; restore the compatible binary, not delete the journal
+or trigger. These guards require retaining the journal schema and triggers. Preserve
 the journal and fixed model/tokenizer for the whole run. Ordinary Search queries are unchanged; the write-visibility search
 uses each newly bounded chunk.
 
@@ -678,7 +683,10 @@ The local benchmark reads each Add request's persisted policy from the authentic
 read-only `POST /diagnostics/render-policy` endpoint (same Add body and credentials).
 It records per-message policies in source manifests, including mixed v1/v2 requests
 and resumed runs. Missing/invalid policies stop attribution explicitly instead of
-silently using a default. To evaluate a known old byte-only adapter lacking this
+silently using a default. Policy lookups use the same six-attempt bounded retry,
+Retry-After handling and body-free request audit as Add/Search. A failed lookup
+keeps completed Add checkpoints, so resume does not repeat successful writes.
+To evaluate a known old byte-only adapter lacking this
 endpoint, explicitly pass `--legacy-byte-rendering`; only a 404 permits that
 fallback. The flag is part of the resume contract and rejects a detected v2 policy.
 Pre-change benchmark checkpoints lack this policy contract and cannot be resumed by

@@ -253,4 +253,164 @@ def test_runner_missing_policy_fails_closed_unless_explicit_old_adapter(
         resume=False,
         legacy_byte_rendering=legacy,
     )
+    monkeypatch.setattr("src.smoke.time.sleep", lambda _: pytest.fail("unexpected retry"))
     assert benchmark.run(args) == (0 if success else 1)
+    events = [
+        json.loads(line)
+        for line in args.output.with_suffix(".requests.jsonl").read_text().splitlines()
+        if json.loads(line)["route"] == "/diagnostics/render-policy"
+    ]
+    assert len(events) == (2 if success else 1)
+    assert all(event["status"] == status and not event["will_retry"] for event in events)
+
+
+def policy_retry_args(tmp_path):
+    source = tmp_path / "input.json"
+    source.write_text(
+        json.dumps(
+            [
+                {
+                    "sample_id": "sample",
+                    "conversation": {
+                        "session_1_date_time": "2025-01-01",
+                        "session_1": [{"dia_id": "D1:1", "speaker": "A", "text": "synthetic fact"}],
+                    },
+                    "qa": [{"question": "fact?", "category": 1, "evidence": ["D1:1"]}],
+                }
+            ]
+        )
+    )
+    return SimpleNamespace(
+        dataset=source,
+        kind="locomo",
+        conversations=1,
+        top_k=100,
+        adapter_url="http://adapter.test",
+        output=tmp_path / "run.json",
+        resume=False,
+    )
+
+
+@pytest.mark.parametrize("failure", [408, 429, 503, "transport"])
+def test_policy_transient_failure_retries_identical_body_and_audits_then_searches(
+    tmp_path,
+    monkeypatch,
+    failure,
+):
+    args = policy_retry_args(tmp_path)
+    adds, policies, searches, delays = [], [], [], []
+    monkeypatch.setenv("ADAPTER_API_KEY", "synthetic-policy-key")
+    monkeypatch.setattr("src.smoke.time.sleep", delays.append)
+
+    def route(request):
+        body = json.loads(request.content) if request.content else {}
+        if request.url.path == "/add":
+            adds.append(body)
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    **{k: body[k] for k in ("request_id", "user_id", "session_id")},
+                },
+            )
+        if request.url.path == "/diagnostics/render-policy":
+            assert request.headers["Authorization"] == "Bearer synthetic-policy-key"
+            policies.append(body)
+            if len(policies) == 1:
+                if failure == "transport":
+                    raise httpx.ReadTimeout("synthetic upstream detail", request=request)
+                return httpx.Response(
+                    failure,
+                    headers={"Retry-After": "4"},
+                    json={"detail": "synthetic upstream detail"},
+                )
+            return httpx.Response(200, json={"policy": token_policy(4096)})
+        if request.url.path == "/search":
+            searches.append(body)
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"id": "synthetic", "content": "[user]\n[2025-01-01] A: synthetic fact"}
+                    ]
+                },
+            )
+        return httpx.Response(200, json={"status": "ok"})
+
+    original = httpx.Client
+    monkeypatch.setattr(
+        benchmark.httpx, "Client", lambda **kw: original(transport=httpx.MockTransport(route), **kw)
+    )
+    assert benchmark.run(args) == 0
+    assert len(adds) == 1 and len(searches) == 1
+    assert policies == [adds[0], adds[0]]
+    assert len(delays) == 1
+    if failure in {429, 503}:
+        assert 4 <= delays[0] <= 5
+    audit_text = args.output.with_suffix(".requests.jsonl").read_text()
+    events = [
+        json.loads(line)
+        for line in audit_text.splitlines()
+        if json.loads(line)["route"] == "/diagnostics/render-policy"
+    ]
+    assert [event["attempt"] for event in events] == [1, 2]
+    assert [event["will_retry"] for event in events] == [True, False]
+    assert [event["status"] for event in events] == [failure, 200]
+    assert len({event["request_sha256"] for event in events}) == 1
+    for value in ("synthetic-policy-key", "synthetic fact", "synthetic upstream detail"):
+        assert value not in audit_text
+    report = json.loads(args.output.read_text())
+    assert report["summary"]["mean_evidence_recall"] == 1
+    assert any(
+        row["route"] == "/diagnostics/render-policy" and row["retried_attempts"] == 1
+        for row in report["request_diagnostics"]
+    )
+
+
+def test_policy_retry_exhaustion_preserves_add_checkpoint_and_resume_skips_add(
+    tmp_path,
+    monkeypatch,
+):
+    args = policy_retry_args(tmp_path)
+    calls, delays = [], []
+    unavailable = True
+    monkeypatch.setattr("src.smoke.time.sleep", delays.append)
+
+    def route(request):
+        calls.append(request.url.path)
+        if request.url.path == "/diagnostics/render-policy":
+            return httpx.Response(503 if unavailable else 200, json={"policy": token_policy(4096)})
+        if request.url.path == "/add":
+            body = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "success": True,
+                    **{k: body[k] for k in ("request_id", "user_id", "session_id")},
+                },
+            )
+        if request.url.path == "/search":
+            return httpx.Response(200, json={"data": []})
+        return httpx.Response(200, json={"status": "ok"})
+
+    original = httpx.Client
+    monkeypatch.setattr(
+        benchmark.httpx, "Client", lambda **kw: original(transport=httpx.MockTransport(route), **kw)
+    )
+    assert benchmark.run(args) == 1
+    report = json.loads(args.output.read_text())
+    assert report["stage"] == "render-policy" and report["error"]["http_status"] == 503
+    assert len(report["completed_adds"]) == 1 and not report["questions"]
+    assert calls.count("/diagnostics/render-policy") == 6 and len(delays) == 5
+    assert calls.count("/add") == 1 and "/search" not in calls
+    unavailable = False
+    args.resume = True
+    assert benchmark.run(args) == 0
+    assert calls.count("/add") == 1 and calls.count("/search") == 1
+    assert calls.count("/diagnostics/render-policy") == 7
+    events = [
+        json.loads(line)
+        for line in args.output.with_suffix(".requests.jsonl").read_text().splitlines()
+        if json.loads(line)["route"] == "/diagnostics/render-policy"
+    ]
+    assert [event["will_retry"] for event in events] == [True] * 5 + [False, False]

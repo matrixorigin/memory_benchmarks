@@ -263,18 +263,15 @@ def run(args):
                         persist()
                         print(f"Added {sample}/{session}/{index}", flush=True)
                     report.update(stage="render-policy", current=rid)
-                    response = http.post(
-                        args.adapter_url.rstrip("/") + "/diagnostics/render-policy",
-                        headers=headers,
-                        json=body,
-                    )
-                    if response.status_code == 404 and getattr(
-                        args, "legacy_byte_rendering", False
-                    ):
+                    try:
+                        payload = call(http, "/diagnostics/render-policy", body, rid)
+                    except httpx.HTTPStatusError as exc:
+                        if exc.response.status_code != 404 or not getattr(
+                            args, "legacy_byte_rendering", False
+                        ):
+                            raise
                         policy = {"version": 1}
                     else:
-                        response.raise_for_status()
-                        payload = response.json()
                         if not isinstance(payload, dict) or "policy" not in payload:
                             raise ValueError(
                                 "Adapter rendering policy unavailable; cannot attribute evidence"
