@@ -5,7 +5,7 @@ from itertools import chain, pairwise
 from .budget import catalog_retry_budget, request_budget
 from .budget import remaining as budget_remaining
 from .config import Settings
-from .embedding_tokens import TOKENIZER_SHA256
+from .embedding_tokens import policy_budget, token_policy
 from .errors import AdapterError
 from .ingestion import message_parts
 from .journal import LEGACY_PROTOCOL, Journal
@@ -44,11 +44,7 @@ class MemoryAdapter:
                 policy = self.journal.request_policy(
                     key,
                     fingerprint,
-                    {
-                        "version": 2,
-                        "tokenizer_sha256": TOKENIZER_SHA256,
-                        "max_tokens": self.settings.embedding_token_budget,
-                    },
+                    token_policy(self.settings.embedding_token_budget),
                 )
                 # One-item lookahead identifies the last chunk without buffering
                 # the entire request, so its stored marker and completion commit together.
@@ -69,22 +65,27 @@ class MemoryAdapter:
                 session_id=request.session_id,
             )
 
-    def write_bodies(self, request: AddRequest, key: str, policy: dict | None = None):
-        # Explicit default keeps historical audit helpers and recovery fixtures v1.
-        policy = policy if policy is not None else {"version": 1}
-        if policy == {"version": 1} and type(policy["version"]) is int:
-            token_budget = None
-        elif (
-            set(policy) == {"version", "tokenizer_sha256", "max_tokens"}
-            and type(policy["version"]) is int
-            and policy["version"] == 2
-            and policy["tokenizer_sha256"] == TOKENIZER_SHA256
-            and type(policy["max_tokens"]) is int
-            and 128 <= policy["max_tokens"] <= 8192
-        ):
-            token_budget = policy["max_tokens"]
-        else:
-            raise AdapterError(503, "Unsupported journal rendering policy; check adapter version")
+    def render_policy(self, request: AddRequest) -> dict:
+        owner = self.owner(request.user_id)
+        key = digest([self.settings.memoria_url.rstrip("/"), owner, request.request_id])
+        policy = self.journal.request_policy(
+            key, digest(request.model_dump()), None, include_completed=True
+        )
+        try:
+            policy_budget(policy)
+        except ValueError:
+            raise AdapterError(
+                503, "Unsupported journal rendering policy; check adapter version"
+            ) from None
+        return policy
+
+    def write_bodies(self, request: AddRequest, key: str, policy: dict):
+        try:
+            token_budget = policy_budget(policy)
+        except ValueError:
+            raise AdapterError(
+                503, "Unsupported journal rendering policy; check adapter version"
+            ) from None
         session = digest([self.settings.namespace, request.user_id, request.session_id])
         for message_index, message in enumerate(request.messages):
             for part_index, (content, observed_at) in enumerate(

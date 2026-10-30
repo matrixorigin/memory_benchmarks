@@ -13,6 +13,30 @@ TOKENIZER_REVISION = "5617a9f61b028005a4858fdac845db406aefb181"
 TOKENIZER_SHA256 = "21106b6d7dab2952c1d496fb21d5dc9db75c28ed361a05f5020bbba27810dd08"
 TOKENIZER_URL = f"https://huggingface.co/BAAI/bge-m3/resolve/{TOKENIZER_REVISION}/tokenizer.json"
 DEFAULT_TOKEN_BUDGET = 7680
+MIN_TOKEN_BUDGET = 128
+MAX_TOKEN_BUDGET = 8192
+
+
+def token_policy(budget: int) -> dict:
+    policy = {"version": 2, "tokenizer_sha256": TOKENIZER_SHA256, "max_tokens": budget}
+    policy_budget(policy)
+    return policy
+
+
+def policy_budget(policy: dict) -> int | None:
+    if policy == {"version": 1} and type(policy["version"]) is int:
+        return None
+    if (
+        isinstance(policy, dict)
+        and set(policy) == {"version", "tokenizer_sha256", "max_tokens"}
+        and type(policy["version"]) is int
+        and policy["version"] == 2
+        and policy["tokenizer_sha256"] == TOKENIZER_SHA256
+        and type(policy["max_tokens"]) is int
+        and MIN_TOKEN_BUDGET <= policy["max_tokens"] <= MAX_TOKEN_BUDGET
+    ):
+        return policy["max_tokens"]
+    raise ValueError("Unsupported rendering policy")
 
 
 def tokenizer_path() -> Path:

@@ -13,7 +13,7 @@ from test_endpoints import FakeMemoria, addition, running
 
 from src.config import Settings
 from src.errors import AdapterError
-from src.journal import IDEMPOTENT_PROTOCOL, LEGACY_PROTOCOL, Journal
+from src.journal import IDEMPOTENT_PROTOCOL, LEGACY_PROTOCOL, TOKEN_PROTOCOL, Journal
 from src.memoria import IDEMPOTENT_PATH, Memoria
 from src.models import AddRequest
 from src.service import MemoryAdapter, digest
@@ -38,7 +38,9 @@ def legacy_journal(settings, upstream, payload, entries, *, complete=False):
     request = AddRequest.model_validate(payload)
     owner = digest([settings.namespace, request.user_id])
     key = digest([settings.memoria_url, owner, request.request_id])
-    bodies = list(MemoryAdapter(settings, None, None).write_bodies(request, key))
+    bodies = list(
+        MemoryAdapter(settings, None, None).write_bodies(request, key, policy={"version": 1})
+    )
     with sqlite3.connect(settings.state_dir / "requests.sqlite3") as db:
         db.executescript("""
             CREATE TABLE requests(key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,
@@ -119,7 +121,7 @@ def test_process_exit_after_inflight_before_http_recovers(settings, upstream):
     assert not (settings.state_dir / "unexpected-post").exists()
     with sqlite3.connect(settings.state_dir / "requests.sqlite3") as db:
         assert db.execute("SELECT state, protocol FROM writes").fetchall() == [
-            ("inflight", IDEMPOTENT_PROTOCOL)
+            ("inflight", TOKEN_PROTOCOL)
         ]
     with running(settings, upstream) as client:
         assert client.post("/add", json=addition()).status_code == 200
@@ -309,7 +311,7 @@ def test_backend_rejects_changed_body_for_same_atomic_key(settings, upstream):
         request = AddRequest.model_validate(addition())
         adapter = MemoryAdapter(settings, memoria, None)
         owner = adapter.owner(request.user_id)
-        body = next(adapter.write_bodies(request, "synthetic-key"))
+        body = next(adapter.write_bodies(request, "synthetic-key", policy={"version": 1}))
         marker = body["extra_metadata"]["aml_write"]
         memoria.store_idempotent(owner, body, marker)
         with pytest.raises(AdapterError) as raised:

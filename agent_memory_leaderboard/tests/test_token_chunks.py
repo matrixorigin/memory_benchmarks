@@ -32,7 +32,7 @@ def test_reported_byte_valid_token_overflow_is_split_without_loss():
     assert len(legacy) == 1
     assert len(legacy[0][0].encode()) < MAX_MEMORY_BYTES
     assert token_count(legacy[0][0]) > 8192
-    parts = list(message_parts(message))
+    parts = list(message_parts(message, token_budget=7680))
     assert len(parts) > 1
     header = "[user at 2024-01-01T00:00:00.000Z]\n"
     assert "".join(p.removeprefix(header) for p, _ in parts) == message.content
@@ -60,10 +60,14 @@ def test_original_text_preserved_even_when_tokenizer_normalizes(text):
 
 def test_short_message_unchanged_and_concurrent_tokenization_deterministic():
     message = Message(role="user", content="A short fact.", timestamp=-1)
-    assert list(message_parts(message)) == list(message_parts(message, token_budget=None))
+    assert list(message_parts(message, token_budget=7680)) == list(
+        message_parts(message, token_budget=None)
+    )
     large = Message(role="assistant", content=dense_text())
     with ThreadPoolExecutor(max_workers=16) as executor:
-        outputs = list(executor.map(lambda _: list(message_parts(large)), range(16)))
+        outputs = list(
+            executor.map(lambda _: list(message_parts(large, token_budget=7680)), range(16))
+        )
     assert all(result == outputs[0] for result in outputs)
 
 

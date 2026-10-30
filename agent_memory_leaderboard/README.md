@@ -667,11 +667,22 @@ request still uses its original byte-only chunks, even if one exceeds the model
 limit. Never clear its journal or reinterpret existing positions to force a
 retry. Coordinate an explicit replay/migration plan for such requests. Keep one
 adapter worker/replica and stop the old version before upgrading. Do not roll
-back to a byte-only binary with unfinished v2 requests: old code cannot honor
-pinned token boundaries. Preserve the journal and fixed model/tokenizer for the
-whole run. Ordinary Search queries are unchanged; the write-visibility search
+back to a byte-only binary with unfinished v2 requests. Token-policy receipts use
+an unknown-to-old-code protocol, and SQLite triggers reject v1 writes to any new
+position of a v2 request. Old versions fail with 503 instead of silently skipping
+content. These guards require retaining the journal schema and triggers. Preserve
+the journal and fixed model/tokenizer for the whole run. Ordinary Search queries are unchanged; the write-visibility search
 uses each newly bounded chunk.
 
-Local source manifests use the new default rendering version for attribution.
-They must not be treated as an exact reproduction of old v1 runs or runs using
-a different token budget.
+The local benchmark reads each Add request's persisted policy from the authenticated,
+read-only `POST /diagnostics/render-policy` endpoint (same Add body and credentials).
+It records per-message policies in source manifests, including mixed v1/v2 requests
+and resumed runs. Missing/invalid policies stop attribution explicitly instead of
+silently using a default. To evaluate a known old byte-only adapter lacking this
+endpoint, explicitly pass `--legacy-byte-rendering`; only a 404 permits that
+fallback. The flag is part of the resume contract and rejects a detected v2 policy.
+Pre-change benchmark checkpoints lack this policy contract and cannot be resumed by
+this runner; preserve them for analysis and use the matching runner or a new run.
+
+The tokenizer download has its own Docker layer, independent of other application
+source changes. CI caches the public asset and always verifies its checksum.

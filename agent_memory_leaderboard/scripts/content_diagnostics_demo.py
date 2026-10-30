@@ -12,6 +12,7 @@ import httpx
 from src import benchmark
 from src.checkpoint import save
 from src.content_diagnostics import ContentDiagnostics
+from src.embedding_tokens import DEFAULT_TOKEN_BUDGET, token_policy
 from src.evaluation import AnswerEvaluator, EvaluationConfig
 from src.ingestion import message_parts
 from src.models import Message
@@ -62,9 +63,13 @@ def run(output_dir, scenario):
     def respond(request):
         body = json.loads(request.content) if request.content else {}
         if request.url.host == "adapter.invalid":
+            if request.url.path == "/diagnostics/render-policy":
+                return httpx.Response(200, json={"policy": token_policy(DEFAULT_TOKEN_BUDGET)})
             if request.url.path == "/add":
                 for message in body["messages"]:
-                    for content, _ in message_parts(Message.model_validate(message)):
+                    for content, _ in message_parts(
+                        Message.model_validate(message), token_budget=DEFAULT_TOKEN_BUDGET
+                    ):
                         memories.append({"id": f"synthetic-{len(memories)}", "content": content})
                 return httpx.Response(
                     200,
@@ -106,7 +111,9 @@ def run(output_dir, scenario):
         if scenario == "budget-exclusion":
             sample = json.loads(args.dataset.read_text())[0]
             message = next(benchmark.batches(sample["conversation"]))[2][0]
-            content = next(message_parts(Message.model_validate(message)))[0]
+            content = next(
+                message_parts(Message.model_validate(message), token_budget=DEFAULT_TOKEN_BUDGET)
+            )[0]
             evaluator = AnswerEvaluator(EvaluationConfig.from_env(), "locomo")
             _, _, tokens = evaluator.context(sample["qa"][0], [content])
             os.environ["BENCHMARK_INPUT_BUDGET"] = str(tokens)

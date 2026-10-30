@@ -7,6 +7,7 @@ import pytest
 
 from scripts import benchmark_ci as ci
 from src import benchmark, evaluation
+from src.embedding_tokens import DEFAULT_TOKEN_BUDGET, token_policy
 
 
 @pytest.mark.parametrize("failure", ["answer", "judge", "length", "429", "503", "transport"])
@@ -51,6 +52,8 @@ def test_failed_question_continues_and_resume_only_retries_pending_models(
         if host == "adapter.test":
             calls[path] += 1
             assert "PRIVATE_GOLD" not in str(body)
+            if request.url.path == "/diagnostics/render-policy":
+                return httpx.Response(200, json={"policy": token_policy(DEFAULT_TOKEN_BUDGET)})
             if path == "/add":
                 return httpx.Response(
                     200,
@@ -171,6 +174,8 @@ def test_fatal_model_auth_stops_before_next_question(
         body = json.loads(request.content) if request.content else {}
         if request.url.host == "answer.test":
             return httpx.Response(401, text="PRIVATE credential detail")
+        if request.url.path == "/diagnostics/render-policy":
+            return httpx.Response(200, json={"policy": token_policy(DEFAULT_TOKEN_BUDGET)})
         if request.url.path == "/add":
             return httpx.Response(
                 200,

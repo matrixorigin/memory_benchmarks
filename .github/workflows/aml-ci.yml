@@ -29,6 +29,11 @@ jobs:
           enable-cache: true
           cache-dependency-glob: agent_memory_leaderboard/uv.lock
       - run: uv sync --locked --extra evaluation
+      - name: Cache pinned embedding tokenizer
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: agent_memory_leaderboard/src/assets/tokenizer.json
+          key: bge-m3-${{ hashFiles('agent_memory_leaderboard/src/embedding_tokens.py') }}
       - run: uv run --no-sync python -m src.embedding_tokens
       - run: uv run --no-sync ruff check src tests benchmarks scripts/benchmark_ci.py ../deploy/scripts ../deploy/tests
       - run: uv run --no-sync pytest -q

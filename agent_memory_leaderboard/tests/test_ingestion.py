@@ -30,7 +30,7 @@ def test_split_empty_and_invalid_limit():
 def test_message_timestamp_uses_source_milliseconds(timestamp, expected):
     message = Message(role="assistant", content="fact", timestamp=timestamp)
     header = f"[assistant at {expected}]\n" if expected else "[assistant]\n"
-    assert list(message_parts(message)) == [(header + "fact", expected)]
+    assert list(message_parts(message, token_budget=7680)) == [(header + "fact", expected)]
 
 
 def test_message_chunks_include_header_in_byte_limit_and_join_text_parts():

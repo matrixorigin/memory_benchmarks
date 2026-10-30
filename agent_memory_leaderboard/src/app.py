@@ -128,6 +128,17 @@ def create_app(settings: Settings | None = None, *, client: httpx.Client | None 
         issues = [{"loc": e["loc"], "msg": e["msg"], "type": e["type"]} for e in error.errors()]
         return JSONResponse(status_code=422, content={"detail": issues})
 
+    @app.post("/diagnostics/render-policy", dependencies=[Depends(authenticate)])
+    async def render_policy(request: AddRequest):
+        # Authenticated, read-only lookup for local benchmark attribution.
+        # Return no source content or identifiers, only the persisted policy.
+        with request_budget(settings.request_timeout_seconds):
+            async with admission.slot():
+                policy = await anyio.to_thread.run_sync(
+                    adapter.render_policy, request, limiter=business_threads
+                )
+                return {"policy": policy}
+
     @app.post("/add", response_model=AddResponse, dependencies=[Depends(authenticate)])
     async def add(request: AddRequest):
         with request_budget(settings.request_timeout_seconds):

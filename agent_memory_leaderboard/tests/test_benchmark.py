@@ -13,6 +13,7 @@ from src.benchmark import (
     summarize,
 )
 from src.datasets import normalize
+from src.embedding_tokens import DEFAULT_TOKEN_BUDGET, token_policy
 
 
 def test_ingestion_keeps_source_order_and_does_not_include_annotations():
@@ -144,6 +145,8 @@ def test_failed_ingestion_never_searches_and_resume_reuses_ids(
         body = json.loads(request.content) if request.content else {}
         calls.append((request.url.path, body))
         assert "GOLD MUST STAY LOCAL" not in str(body)
+        if request.url.path == "/diagnostics/render-policy":
+            return httpx.Response(200, json={"policy": token_policy(DEFAULT_TOKEN_BUDGET)})
         if request.url.path == "/add":
             if rejected:
                 return httpx.Response(403, json={"detail": {

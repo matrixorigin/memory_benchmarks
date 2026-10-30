@@ -1,5 +1,6 @@
 import json
 
+from src.embedding_tokens import DEFAULT_TOKEN_BUDGET, token_policy
 from src.evidence import SourceManifest, prefix_recalls, recall, source_messages
 from src.ingestion import message_parts
 from src.models import Message
@@ -17,9 +18,9 @@ def conversation(texts):
 
 def test_manifest_matches_original_and_adapter_rendered_content_without_labels():
     data = conversation(["private fact"])
-    manifest = SourceManifest(data)
+    manifest = SourceManifest(data, policy=token_policy(DEFAULT_TOKEN_BUDGET))
     body = next(source_messages(data))[-1]
-    rendered = list(message_parts(Message.model_validate(body)))[0][0]
+    rendered = list(message_parts(Message.model_validate(body), token_budget=7680))[0][0]
     assert manifest.match(body["content"]) == ["D1:1"]
     assert manifest.match(rendered) == ["D1:1"]
     assert "private fact" not in json.dumps(manifest.dump())
@@ -28,7 +29,7 @@ def test_manifest_matches_original_and_adapter_rendered_content_without_labels()
 
 def test_duplicate_content_is_ambiguous_and_never_credited():
     data = conversation(["same fact", "same fact"])
-    manifest = SourceManifest(data)
+    manifest = SourceManifest(data, policy=token_policy(DEFAULT_TOKEN_BUDGET))
     content = next(source_messages(data))[-1]["content"]
     ranked, audit = manifest.audit([content, "unknown"])
     assert ranked == [[], []]
@@ -38,15 +39,17 @@ def test_duplicate_content_is_ambiguous_and_never_credited():
 
 def test_long_utf8_message_matches_each_adapter_chunk():
     data = conversation(["记忆" * 16000 + "ending"])
-    manifest = SourceManifest(data)
+    manifest = SourceManifest(data, policy=token_policy(DEFAULT_TOKEN_BUDGET))
     body = next(source_messages(data))[-1]
-    parts = list(message_parts(Message.model_validate(body)))
+    parts = list(message_parts(Message.model_validate(body), token_budget=7680))
     assert len(parts) >= 3
     assert all(manifest.match(text) == ["D1:1"] for text, _ in parts)
 
 
 def test_redacted_content_stays_unmapped_instead_of_inventing_provenance():
-    manifest = SourceManifest(conversation(["phone 12345"]))
+    manifest = SourceManifest(
+        conversation(["phone 12345"]), policy=token_policy(DEFAULT_TOKEN_BUDGET)
+    )
     assert manifest.audit(["[user]\n[date] A: phone [phone]"])[1]["unmapped_records"] == 1
 
 
