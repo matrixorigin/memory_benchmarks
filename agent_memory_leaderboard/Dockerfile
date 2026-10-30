@@ -8,6 +8,9 @@ RUN if [ "$INSTALL_EXPERIMENT_DEPS" = "true" ]; then \
       pip install --no-cache-dir --require-hashes -r requirements.lock; \
     fi
 RUN useradd --uid 1000 --create-home adapter && mkdir /app/var && chown adapter /app/var
+COPY src/assets ./src/assets
+COPY src/embedding_tokens.py ./src/embedding_tokens.py
+RUN python -m src.embedding_tokens
 COPY src ./src
 USER adapter
 EXPOSE 8000

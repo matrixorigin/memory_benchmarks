@@ -9,7 +9,7 @@ import pytest
 from src import memoria as memoria_module
 from src.config import Settings
 from src.errors import AdapterError
-from src.journal import IDEMPOTENT_PROTOCOL, LEGACY_PROTOCOL, Journal
+from src.journal import IDEMPOTENT_PROTOCOL, LEGACY_PROTOCOL, TOKEN_PROTOCOL, Journal
 from src.memoria import Memoria
 from src.models import AddRequest
 from src.scheduling import BackendScheduler
@@ -135,7 +135,7 @@ def test_visibility_expiry_preserves_inflight_and_same_id_retry_recovers(
         [boundary.settings.memoria_url.rstrip("/"), adapter.owner(model.user_id), model.request_id]
     )
     state, memory_id, protocol = journal.state(key, 0)
-    assert state == "inflight" and memory_id and protocol == IDEMPOTENT_PROTOCOL
+    assert state == "inflight" and memory_id and protocol == TOKEN_PROTOCOL
     assert journal.begin(key, digest(model.model_dump())) is False
     assert len(upstream.writes) == 1
     upstream.hook = None

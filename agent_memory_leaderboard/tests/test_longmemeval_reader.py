@@ -4,6 +4,7 @@ import json
 import httpx
 import pytest
 
+from src.embedding_tokens import DEFAULT_TOKEN_BUDGET, token_policy
 from src.evaluation import AnswerEvaluator, EvaluationConfig, ModelError
 from src.evidence import SourceManifest, source_messages
 from src.ingestion import message_parts
@@ -30,7 +31,7 @@ def returned(conversation):
     return [
         part
         for _, _, _, body in source_messages(conversation)
-        for part, _ in message_parts(Message.model_validate(body))
+        for part, _ in message_parts(Message.model_validate(body), token_budget=7680)
     ]
 
 
@@ -54,7 +55,7 @@ def config(mode="con", **options):
 )
 def test_reader_matches_pinned_native_prompt_bytes(conversation, fake_encoding, mode, expected):
     # Goldens are generated from upstream prepare_prompt on this synthetic fixture.
-    manifest = SourceManifest(conversation)
+    manifest = SourceManifest(conversation, policy=token_policy(DEFAULT_TOKEN_BUDGET))
     contents = list(reversed(returned(conversation)))
     evaluator = AnswerEvaluator(config(mode), "longmemeval")
     messages, info = context(
@@ -75,7 +76,7 @@ def test_reader_matches_pinned_native_prompt_bytes(conversation, fake_encoding, 
 
 def test_reader_never_adds_unretrieved_turns_or_answer_labels(conversation, fake_encoding):
     contents = returned(conversation)[:1]
-    manifest = SourceManifest(conversation)
+    manifest = SourceManifest(conversation, policy=token_policy(DEFAULT_TOKEN_BUDGET))
     evaluator = AnswerEvaluator(config(), "longmemeval")
     messages, _ = context(
         {"question": "q", "question_date": "date", "answer": "PRIVATE_GOLD"},
@@ -96,7 +97,9 @@ def test_reader_never_adds_unretrieved_turns_or_answer_labels(conversation, fake
 def test_fragment_metadata_does_not_expand_to_whole_source(conversation):
     conversation["session_1"][0]["text"] = "x" * 40000 + "UNRETRIEVED_SUFFIX"
     contents = returned(conversation)
-    row = SourceManifest(conversation).reader_records(contents[:1])[0]
+    row = SourceManifest(conversation, policy=token_policy(DEFAULT_TOKEN_BUDGET)).reader_records(
+        contents[:1]
+    )[0]
     assert row["role"] == "user"
     assert "UNRETRIEVED_SUFFIX" not in row["content"]
     assert len(row["content"]) < 40000
@@ -105,7 +108,7 @@ def test_fragment_metadata_does_not_expand_to_whole_source(conversation):
 def test_ambiguous_and_unknown_records_are_not_assigned_source_metadata(conversation):
     conversation["session_2_date_time"] = conversation["session_1_date_time"]
     conversation["session_2"][0]["text"] = "Box is blue."
-    manifest = SourceManifest(conversation)
+    manifest = SourceManifest(conversation, policy=token_policy(DEFAULT_TOKEN_BUDGET))
     assert manifest.reader_records([returned(conversation)[0], "unknown actual memory"]) == [
         None,
         None,

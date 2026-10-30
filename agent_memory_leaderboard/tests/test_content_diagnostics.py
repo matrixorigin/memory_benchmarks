@@ -17,6 +17,7 @@ from src.content_diagnostics import (
     read_record,
     signals,
 )
+from src.embedding_tokens import DEFAULT_TOKEN_BUDGET, token_policy
 
 
 def setup_args(tmp_path, *, enabled=True, mode="retrieval"):
@@ -88,6 +89,8 @@ def handler(calls, *, verdict='{"label": "CORRECT"}', answer="Go", extra_content
         calls[(request.url.host, request.url.path)] += 1
         if request.url.host == "adapter.test":
             assert "reference_answers" not in str(body)
+            if request.url.path == "/diagnostics/render-policy":
+                return httpx.Response(200, json={"policy": token_policy(DEFAULT_TOKEN_BUDGET)})
             if request.url.path == "/add":
                 return httpx.Response(
                     200,
@@ -471,4 +474,11 @@ def test_pending_resume_discloses_missing_search_and_rejects_cache_mismatch(
         assert q["model"]["answer_output"]["from_signature_verified_cache"]
     else:
         assert final["error"]["type"] == "ValueError"
-        assert sum(n for (_, path), n in calls.items() if path != "/health") == 0
+        assert (
+            sum(
+                n
+                for (_, path), n in calls.items()
+                if path not in {"/health", "/diagnostics/render-policy"}
+            )
+            == 0
+        )

@@ -10,7 +10,7 @@ from src import memoria as memoria_module
 from src import scheduling as scheduling_module
 from src.budget import request_budget
 from src.errors import AdapterError
-from src.journal import IDEMPOTENT_PROTOCOL, Journal
+from src.journal import TOKEN_PROTOCOL, Journal
 from src.memoria import IDEMPOTENT_PATH, Memoria
 from src.models import AddRequest
 from src.service import digest
@@ -125,7 +125,7 @@ def test_retry_exhaustion_preserves_atomic_intent_and_later_replay(
         owner = digest([settings.namespace, model.user_id])
         key = digest([settings.memoria_url, owner, model.request_id])
         assert Journal(settings.state_dir).state(key, 0) == (
-            "inflight", None, IDEMPOTENT_PROTOCOL
+            "inflight", None, TOKEN_PROTOCOL
         )
         assert len(upstream.writes) == 6
         assert sum(clock.sleeps) == 5

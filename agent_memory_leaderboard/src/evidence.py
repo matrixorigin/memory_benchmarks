@@ -3,7 +3,8 @@
 import hashlib
 import re
 
-from .ingestion import RENDER_VERSION, message_parts
+from .embedding_tokens import policy_budget
+from .ingestion import message_parts
 from .models import Message
 
 
@@ -33,12 +34,22 @@ def source_messages(conversation):
 
 
 class SourceManifest:
-    def __init__(self, conversation):
+    def __init__(self, conversation, *, policy: dict | list[dict]):
         self.hashes = {}
         self.entries = []
         self.reader_rows = {}
-        for session, index, source, body in source_messages(conversation):
-            parts = [content for content, _ in message_parts(Message.model_validate(body))]
+        messages = list(source_messages(conversation))
+        policies = [policy] * len(messages) if isinstance(policy, dict) else policy
+        if len(policies) != len(messages):
+            raise ValueError("Source manifest rendering policy count mismatch")
+        self.policies = policies
+        for (session, index, source, body), rendering in zip(messages, policies, strict=True):
+            parts = [
+                content
+                for content, _ in message_parts(
+                    Message.model_validate(body), token_budget=policy_budget(rendering)
+                )
+            ]
             # Include exact wire content for adapters returning the original message.
             hashes = sorted({content_hash(body["content"]), *(content_hash(p) for p in parts)})
             for value in hashes:
@@ -72,8 +83,8 @@ class SourceManifest:
 
     def dump(self):
         return {
-            "version": 1,
-            "render_version": RENDER_VERSION,
+            "version": 2,
+            "render_policies": self.policies,
             "method": "exact-content-sha256",
             "entries": self.entries,
         }

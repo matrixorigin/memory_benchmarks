@@ -17,6 +17,7 @@ from .content_diagnostics import ContentDiagnostics
 from .content_diagnostics import options as diagnostic_options
 from .datasets import ADAPTERS, DATASETS, normalize
 from .diagnostics import RetryAudit, adapter_reason_code
+from .embedding_tokens import policy_budget
 from .evaluation import AnswerEvaluator, EvaluationConfig, ModelError
 from .evidence import SourceManifest, prefix_recalls, recall, source_messages
 from .models import AddResponse, SearchResponse
@@ -129,6 +130,11 @@ def run(args):
         "mode": mode,
         "evaluation": evaluator.config.contract() if evaluator else None,
         "kind": args.kind,
+        "rendering_policy_source": (
+            "explicit-legacy-v1"
+            if getattr(args, "legacy_byte_rendering", False)
+            else "adapter-per-request-v1"
+        ),
     }
     if diagnostic_policy is not None:
         contract["content_diagnostics"] = diagnostic_policy
@@ -232,37 +238,60 @@ def run(args):
                 user = f"{args.kind}:{report['run_id']}:{sample}"
                 if user not in report["users"]:
                     report["users"].append(user)
-                manifest = SourceManifest(conversation["conversation"])
+                policies = []
+                for session, index, messages in batches(conversation["conversation"]):
+                    rid = f"{user}:{session}:{index}"
+                    body = dict(request_id=rid, user_id=user, session_id=session, messages=messages)
+                    if rid not in completed:
+                        report.update(stage="add", current=rid)
+                        persist()
+                        if content is not None:
+                            content.add(sample, body)
+                        response = call(http, "/add", body, rid)
+                        if not isinstance(response, dict) or response.get("success") is not True:
+                            raise ValueError("Add response requires explicit success=true")
+                        result = AddResponse.model_validate(response)
+                        if any(
+                            getattr(result, k) != body[k]
+                            for k in ("request_id", "user_id", "session_id")
+                        ):
+                            raise ValueError("Add ID mismatch")
+                        if content is not None:
+                            content.add(sample, body, result.model_dump())
+                        report["completed_adds"].append(rid)
+                        completed.add(rid)
+                        persist()
+                        print(f"Added {sample}/{session}/{index}", flush=True)
+                    report.update(stage="render-policy", current=rid)
+                    try:
+                        payload = call(http, "/diagnostics/render-policy", body, rid)
+                    except httpx.HTTPStatusError as exc:
+                        if exc.response.status_code != 404 or not getattr(
+                            args, "legacy_byte_rendering", False
+                        ):
+                            raise
+                        policy = {"version": 1}
+                    else:
+                        if not isinstance(payload, dict) or "policy" not in payload:
+                            raise ValueError(
+                                "Adapter rendering policy unavailable; cannot attribute evidence"
+                            )
+                        policy = payload["policy"]
+                        policy_budget(policy)
+                        if getattr(args, "legacy_byte_rendering", False) and policy != {
+                            "version": 1
+                        }:
+                            raise ValueError(
+                                "Adapter policy differs from explicit legacy rendering"
+                            )
+                    policies.extend([policy] * len(messages))
+                manifest = SourceManifest(conversation["conversation"], policy=policies)
                 manifest_path = (
                     args.output.parent
                     / (args.output.stem + ".sources")
                     / (hashlib.sha256(sample.encode()).hexdigest() + ".json")
                 )
                 save(manifest_path, manifest.dump())
-                for session, index, messages in batches(conversation["conversation"]):
-                    rid = f"{user}:{session}:{index}"
-                    if rid in completed:
-                        continue
-                    report.update(stage="add", current=rid)
-                    persist()
-                    body = dict(request_id=rid, user_id=user, session_id=session, messages=messages)
-                    if content is not None:
-                        content.add(sample, body)
-                    response = call(http, "/add", body, rid)
-                    if not isinstance(response, dict) or response.get("success") is not True:
-                        raise ValueError("Add response requires explicit success=true")
-                    result = AddResponse.model_validate(response)
-                    if any(
-                        getattr(result, k) != body[k]
-                        for k in ("request_id", "user_id", "session_id")
-                    ):
-                        raise ValueError("Add ID mismatch")
-                    if content is not None:
-                        content.add(sample, body, result.model_dump())
-                    report["completed_adds"].append(rid)
-                    completed.add(rid)
-                    persist()
-                    print(f"Added {sample}/{session}/{index}", flush=True)
                 source_ids = {
                     turn["dia_id"]
                     for session, turns in conversation["conversation"].items()
@@ -461,6 +490,11 @@ def main(default_kind="locomo", default_output=None):
     parser.add_argument("--all", action="store_true", help="Run every history in this dataset")
     parser.add_argument("--top-k", type=int, default=100)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--legacy-byte-rendering",
+        action="store_true",
+        help="Explicit byte-only attribution for old adapters without the policy endpoint",
+    )
     parser.add_argument("--mode", choices=["retrieval", "answer-eval"], default="retrieval")
     parser.add_argument(
         "--private-dir", type=Path, help="Private resumable answer cache; do not upload"

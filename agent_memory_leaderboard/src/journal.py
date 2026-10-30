@@ -1,6 +1,7 @@
 """Durable idempotency state, with process-safe locks on a shared local disk."""
 
 import fcntl
+import json
 import math
 import sqlite3
 import threading
@@ -15,6 +16,7 @@ from .journal_metrics import JournalMetrics
 
 LEGACY_PROTOCOL = "legacy"
 IDEMPOTENT_PROTOCOL = "idempotent_v1"
+TOKEN_PROTOCOL = "idempotent_tokens_v2"
 
 
 class TimedConnection:
@@ -69,9 +71,22 @@ class Journal:
                     PRIMARY KEY (request_key, position)
                 )
             """)
+            request_columns = {row[1] for row in db.execute("PRAGMA table_info(requests)")}
+            if "render_policy" not in request_columns:
+                db.execute("""ALTER TABLE requests ADD COLUMN render_policy TEXT NOT NULL
+                              DEFAULT '{"version":1}'""")
             columns = {row[1] for row in db.execute("PRAGMA table_info(writes)")}
             if "protocol" not in columns:
                 db.execute("ALTER TABLE writes ADD COLUMN protocol TEXT NOT NULL DEFAULT 'legacy'")
+            # Old binaries ignore render_policy. Guard absent positions as well as
+            # existing v2 receipts: their v1 INSERT/UPSERT must fail atomically.
+            for operation in ("INSERT", "UPDATE"):
+                db.execute(f"""CREATE TRIGGER IF NOT EXISTS protect_token_writes_{operation.lower()}
+                    BEFORE {operation} ON writes
+                    WHEN EXISTS (SELECT 1 FROM requests WHERE key = NEW.request_key
+                        AND json_extract(render_policy, '$.version') = 2)
+                        AND NEW.protocol != '{TOKEN_PROTOCOL}'
+                    BEGIN SELECT RAISE(ABORT, 'Unsupported rendering protocol'); END""")
 
     def _acquire_connection_slot(self):
         queue_budget = budget_remaining(self.queue_timeout_seconds)
@@ -208,7 +223,7 @@ class Journal:
                         raise
 
     @staticmethod
-    def _begin(db, key: str, fingerprint: str) -> bool:
+    def _begin(db, key: str, fingerprint: str, render_policy: dict | None = None) -> bool:
         row = db.execute(
             "SELECT fingerprint, complete FROM requests WHERE key = ?", (key,)
         ).fetchone()
@@ -220,12 +235,52 @@ class Journal:
                     "restore the original payload",
                 )
             return bool(row[1])
-        db.execute("INSERT INTO requests(key, fingerprint) VALUES (?, ?)", (key, fingerprint))
+        db.execute(
+            "INSERT INTO requests(key, fingerprint, render_policy) VALUES (?, ?, ?)",
+            (key, fingerprint, json.dumps(render_policy or {"version": 1}, sort_keys=True)),
+        )
         return False
 
     def begin(self, key: str, fingerprint: str) -> bool:
         with self.connect("begin") as db:
             return self._begin(db, key, fingerprint)
+
+    def request_policy(
+        self, key: str, fingerprint: str, default: dict | None, *, include_completed=False
+    ) -> dict | None:
+        """The Add caller holds lock(key); diagnostics only reads immutable policies.
+
+        The first prepare_write persists the chosen policy atomically with intent.
+
+        Existing rows migrate to byte-only v1. Never reinterpret old positions
+        or rewrite old receipts when the default budget changes. None is a
+        completed replay (after checking the payload fingerprint).
+        """
+        with self.connect("state") as db:
+            row = db.execute(
+                "SELECT fingerprint, complete, render_policy FROM requests WHERE key = ?", (key,)
+            ).fetchone()
+            if row is None:
+                if default is None:
+                    raise AdapterError(503, "Request rendering policy is not recorded")
+                return default
+            if row[0] != fingerprint:
+                raise AdapterError(
+                    400,
+                    "request_id was already used with a different payload; "
+                    "restore the original payload",
+                )
+            if row[1] and not include_completed:
+                return None
+            try:
+                policy = json.loads(row[2])
+            except (TypeError, ValueError):
+                raise AdapterError(
+                    503, "Invalid journal rendering policy; check adapter version"
+                ) from None
+            if not isinstance(policy, dict):
+                raise AdapterError(503, "Invalid journal rendering policy; check adapter version")
+            return policy
 
     @staticmethod
     def _state(db, key: str, position: int) -> tuple[str, str | None, str]:
@@ -251,7 +306,7 @@ class Journal:
         )
 
     def prepare_write(
-        self, key: str, fingerprint: str, position: int
+        self, key: str, fingerprint: str, position: int, *, render_policy: dict | None = None
     ) -> tuple[str, str | None, str] | None:
         """Register the request and persist send intent in one durable transaction.
 
@@ -259,17 +314,23 @@ class Journal:
         Legacy unknown outcomes must never be converted to atomic receipts.
         """
         with self.connect("prepare_write") as db:
-            if self._begin(db, key, fingerprint):
+            if self._begin(db, key, fingerprint, render_policy):
                 return None
             state, memory_id, protocol = self._state(db, key, position)
-            if protocol not in {LEGACY_PROTOCOL, IDEMPOTENT_PROTOCOL}:
+            if protocol not in {LEGACY_PROTOCOL, IDEMPOTENT_PROTOCOL, TOKEN_PROTOCOL}:
                 raise AdapterError(503, "Unsupported journal write protocol; check adapter version")
             if state not in {"pending", "inflight", "stored"}:
                 raise AdapterError(503, "Unsupported journal write state; check adapter version")
             if state == "pending":
                 # Pending legacy writes are known not to have been sent. Persist
                 # the atomic protocol before HTTP, including on the first chunk.
-                state, memory_id, protocol = "inflight", None, IDEMPOTENT_PROTOCOL
+                policy = json.loads(
+                    db.execute(
+                        "SELECT render_policy FROM requests WHERE key = ?", (key,)
+                    ).fetchone()[0]
+                )
+                protocol = TOKEN_PROTOCOL if policy.get("version") == 2 else IDEMPOTENT_PROTOCOL
+                state, memory_id = "inflight", None
                 self._record(db, key, position, state, memory_id, protocol)
             return state, memory_id, protocol
 

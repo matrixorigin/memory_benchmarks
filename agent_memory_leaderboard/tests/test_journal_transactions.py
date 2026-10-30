@@ -8,7 +8,7 @@ from test_endpoints import FakeMemoria, addition
 
 from src.config import Settings
 from src.errors import AdapterError
-from src.journal import IDEMPOTENT_PROTOCOL, Journal
+from src.journal import IDEMPOTENT_PROTOCOL, TOKEN_PROTOCOL, Journal
 from src.memoria import Memoria
 from src.models import AddRequest
 from src.service import MemoryAdapter, digest
@@ -85,7 +85,7 @@ def test_failed_commit_preserves_recoverable_state(adapter, monkeypatch, failed_
         assert not upstream.writes
     else:
         assert requests == [(0,)]
-        assert writes[0][0] == "inflight" and writes[0][2] == IDEMPOTENT_PROTOCOL
+        assert writes[0][0] == "inflight" and writes[0][2] == TOKEN_PROTOCOL
         assert (writes[0][1] is not None) == (failed_commit == 3)
     # Reopen the journal as on restart. A lost ACK can replay the same receipt;
     # a durable known ID must recover without issuing another write.

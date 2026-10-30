@@ -10,6 +10,7 @@ from starlette.exceptions import HTTPException
 
 from .budget import request_budget
 from .config import Settings
+from .embedding_tokens import load_tokenizer
 from .errors import AdapterError
 from .journal import Journal
 from .memoria import Memoria
@@ -20,6 +21,7 @@ from .service import MemoryAdapter
 
 def create_app(settings: Settings | None = None, *, client: httpx.Client | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
+    load_tokenizer()  # Fail startup rather than accept traffic with missing/wrong assets.
     http = client or httpx.Client(follow_redirects=False, trust_env=False)
     # Keep probe connections and thread capacity independent of long Add/Search calls.
     probe_http = client or httpx.Client(
@@ -125,6 +127,17 @@ def create_app(settings: Settings | None = None, *, client: httpx.Client | None 
         # Pydantic's default includes input values; avoid echoing entire histories.
         issues = [{"loc": e["loc"], "msg": e["msg"], "type": e["type"]} for e in error.errors()]
         return JSONResponse(status_code=422, content={"detail": issues})
+
+    @app.post("/diagnostics/render-policy", dependencies=[Depends(authenticate)])
+    async def render_policy(request: AddRequest):
+        # Authenticated, read-only lookup for local benchmark attribution.
+        # Return no source content or identifiers, only the persisted policy.
+        with request_budget(settings.request_timeout_seconds):
+            async with admission.slot():
+                policy = await anyio.to_thread.run_sync(
+                    adapter.render_policy, request, limiter=business_threads
+                )
+                return {"policy": policy}
 
     @app.post("/add", response_model=AddResponse, dependencies=[Depends(authenticate)])
     async def add(request: AddRequest):

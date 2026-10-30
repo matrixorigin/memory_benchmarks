@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import httpx
 
 from src import benchmark, evaluation
+from src.embedding_tokens import DEFAULT_TOKEN_BUDGET, token_policy
 
 
 def test_longmemeval_resume_reuses_add_search_and_answer(
@@ -48,6 +49,8 @@ def test_longmemeval_resume_reuses_add_search_and_answer(
         calls[(host, route)] += 1
         if host == "adapter.test":
             assert "PRIVATE_GOLD" not in str(body) and "has_answer" not in str(body)
+            if route == "/diagnostics/render-policy":
+                return httpx.Response(200, json={"policy": token_policy(DEFAULT_TOKEN_BUDGET)})
             if route == "/add":
                 stored.extend(body["messages"])
                 return httpx.Response(

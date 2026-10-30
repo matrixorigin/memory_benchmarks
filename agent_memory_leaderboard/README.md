@@ -41,6 +41,7 @@ personal API key cannot provide isolation for multiple leaderboard users.
 
 ```sh
 uv sync --locked
+uv run python -m src.embedding_tokens
 export MEMORIA_URL=http://127.0.0.1:8100
 export MEMORIA_MASTER_KEY='your-memoria-master-key'
 export ADAPTER_API_KEY='a-separate-leaderboard-access-key'
@@ -626,3 +627,70 @@ The self-run benchmark client can generate bounded, private local per-question
 Add/Search/Answer/Eval reports for independently sourced synthetic or permitted
 public data. This is disabled by default and adds no official-request body logs.
 See [the offline demonstration, source declaration and limits](benchmarks/EVALUATION.md#opt-in-local-content-diagnostics).
+
+### Token-aware ingestion and retry compatibility
+
+New Add requests use both the existing 32 KiB UTF-8 bound and a BGE-M3 token
+budget. `ADAPTER_EMBEDDING_TOKEN_BUDGET` defaults to **7680** (allowed range
+128–8192); the count includes the transmitted role/time prefix and special
+tokens. Original Unicode is sliced without tokenizer decoding, truncation or
+summarization. Short messages that fit both limits remain unchanged. Splitting
+increases write/embedding/visibility-check work for long messages.
+
+The tokenizer is pinned to `BAAI/bge-m3` revision
+`5617a9f61b028005a4858fdac845db406aefb181`, with SHA-256
+`21106b6d7dab2952c1d496fb21d5dc9db75c28ed361a05f5020bbba27810dd08`.
+The upstream [BGE-M3 model/tokenizer](https://huggingface.co/BAAI/bge-m3) is
+MIT-licensed. The tokenizer runtime is locked with the Python dependencies.
+This configuration targets BGE-M3's 8192-token input limit; it is not a generic
+limit for other embedding models. Changing the backend model requires checking
+its tokenizer and adding a compatible, versioned rendering policy first.
+
+Run `uv run python -m src.embedding_tokens` after installing dependencies and
+before local startup/tests. This downloads only the public tokenizer, verifies
+its checksum and stores it in ignored `src/assets/tokenizer.json`. The image
+build does this automatically. `ADAPTER_TOKENIZER_PATH` may point to a preloaded
+copy of the **same** asset. Runtime requests never download assets; missing or
+mismatched assets fail application startup. For offline builds, preload the
+verified asset in the build context. An existing verified copy is reused.
+
+Each request's journal row pins its rendering version, tokenizer digest and
+budget in the same durable transaction as its first write intent. Changing the
+default budget only affects new requests. Existing journals migrate old rows to
+byte-only version 1, retaining their chunk boundaries, positions and idempotency
+keys. Completed retries return without re-rendering or backend calls. Unknown
+policies fail before sending a write. The number of durable journal commits
+remains three per new chunk; policy lookup adds one read per Add.
+
+**This does not automatically repair old oversized requests.** An incomplete v1
+request still uses its original byte-only chunks, even if one exceeds the model
+limit. Never clear its journal or reinterpret existing positions to force a
+retry. Coordinate an explicit replay/migration plan for such requests. Keep one
+adapter worker/replica and stop the old version before upgrading. Do not roll
+back to a byte-only binary with unfinished v2 requests. Token-policy receipts use
+an unknown-to-old-code protocol, and SQLite triggers reject v1 writes to any new
+position of a v2 request. Old versions fail with 503 instead of silently skipping
+content. If an old binary reaches the SQLite trigger, it raises an IntegrityError
+with `Unsupported rendering protocol`. The pre-upgrade journal catches SQLite
+errors and returns generic HTTP 503 `Idempotency journal unavailable`, rather than
+the explicit version-check message from its protocol whitelist. Check the deployed
+binary/journal versions first; restore the compatible binary, not delete the journal
+or trigger. These guards require retaining the journal schema and triggers. Preserve
+the journal and fixed model/tokenizer for the whole run. Ordinary Search queries are unchanged; the write-visibility search
+uses each newly bounded chunk.
+
+The local benchmark reads each Add request's persisted policy from the authenticated,
+read-only `POST /diagnostics/render-policy` endpoint (same Add body and credentials).
+It records per-message policies in source manifests, including mixed v1/v2 requests
+and resumed runs. Missing/invalid policies stop attribution explicitly instead of
+silently using a default. Policy lookups use the same six-attempt bounded retry,
+Retry-After handling and body-free request audit as Add/Search. A failed lookup
+keeps completed Add checkpoints, so resume does not repeat successful writes.
+To evaluate a known old byte-only adapter lacking this
+endpoint, explicitly pass `--legacy-byte-rendering`; only a 404 permits that
+fallback. The flag is part of the resume contract and rejects a detected v2 policy.
+Pre-change benchmark checkpoints lack this policy contract and cannot be resumed by
+this runner; preserve them for analysis and use the matching runner or a new run.
+
+The tokenizer download has its own Docker layer, independent of other application
+source changes. CI caches the public asset and always verifies its checksum.
